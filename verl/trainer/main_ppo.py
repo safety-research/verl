@@ -17,7 +17,7 @@ Note that we don't combine the main with ray_trainer as ray_trainer is used by o
 
 from verl import DataProto
 import torch
-from verl.utils.reward_score import gsm8k, math
+from verl.utils.reward_score import gsm8k, math, boxes
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 
 
@@ -26,6 +26,10 @@ def _default_compute_score(data_source, solution_str, ground_truth):
         return gsm8k.compute_score(solution_str, ground_truth)
     elif data_source in ['lighteval/MATH', 'DigitalLearningGmbH/MATH-lighteval']:
         return math.compute_score(solution_str, ground_truth)
+    elif data_source == 'cfpark00/MATH':
+        return math.compute_score(solution_str, ground_truth)
+    elif data_source == 'cfpark00/boxes':
+        return boxes.compute_score(solution_str, ground_truth)
     else:
         raise NotImplementedError
 
@@ -90,13 +94,13 @@ class RewardManager():
 
 
 import ray
+"""
 import hydra
-
 
 @hydra.main(config_path='config', config_name='ppo_trainer', version_base=None)
 def main(config):
     run_ppo(config)
-
+"""
 
 def run_ppo(config, compute_score=None):
     if not ray.is_initialized():
@@ -191,6 +195,43 @@ def main_task(config, compute_score=None):
     trainer.init_workers()
     trainer.fit()
 
+def main():
+    import argparse
+    import os
+    from omegaconf import OmegaConf
 
-if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description="Run PPO training with config overrides from a YAML file."
+    )
+    parser.add_argument(
+        "override_yaml",
+        type=str,
+        help="Path to the YAML file containing configuration overrides.",
+    )
+    args = parser.parse_args()
+
+    default_config_path = os.path.join(
+        os.path.dirname(__file__), "config", "ppo_trainer.yaml"
+    )
+    if not os.path.exists(default_config_path):
+        raise FileNotFoundError(
+            f"Default configuration file not found at {default_config_path}"
+        )
+
+    # Load the default configuration
+    default_cfg = OmegaConf.load(default_config_path)
+
+    # Load the overrides from the user-specified YAML file.
+    if not os.path.exists(args.override_yaml):
+        raise FileNotFoundError(f"Override file not found: {args.override_yaml}")
+    override_cfg = OmegaConf.load(args.override_yaml)
+
+    merged_cfg = OmegaConf.merge(default_cfg, override_cfg)
+
+    print(OmegaConf.to_yaml(merged_cfg))
+
+    run_ppo(merged_cfg)
+
+
+if __name__ == "__main__":
     main()

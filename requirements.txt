@@ -17,3 +17,5 @@ wandb
 liger-kernel
 pylatexenc
 pyext
+wandb
+omegaconf
