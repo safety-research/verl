@@ -464,7 +464,7 @@ class vLLMMultiTurnRollout(BaseRollout):
         response_generation_mask=[]
         for i_batch_sample in range(batch_size*n):
             response.append(torch.tensor(idx_list[i_batch_sample][prefix_lengths[i_batch_sample]:],device=idx.device,dtype=idx.dtype))
-            response_generation_mask.append(torch.stack(generation_mask[i_batch_sample][1:],dim=0))#skip the prefix
+            response_generation_mask.append(torch.cat(generation_mask[i_batch_sample][1:],dim=0))#skip the prefix
         response=pad_to_max_stack(response,self.pad_token_id,dim=0)
         response_generation_mask=pad_to_max_stack(response_generation_mask,0,dim=0)
         #assert same shape
@@ -502,8 +502,8 @@ class vLLMMultiTurnRollout(BaseRollout):
         generation_mask = torch.cat([idx_generation_mask, response_generation_mask], dim=-1)
         response_attention_mask = get_eos_mask(response_id=response, eos_token=eos_token_id, dtype=attention_mask.dtype)
         attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
-        print("GENERATION_MASK",generation_mask)
-        assert False
+        print("GENERATION_MASK",generation_mask[0])
+        #assert False
 
         # all the tp ranks should contain the same data here. data in all ranks are valid
         batch = TensorDict(
