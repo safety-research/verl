@@ -209,6 +209,8 @@ def compute_data_metrics(batch, use_critic=True):
         return_diff_var = torch.var(valid_returns - valid_values)
         return_var = torch.var(valid_returns)
 
+    print("BATCH",batch)
+    print("rs",sequence_reward.shape)
     metrics = {
         # score
         'critic/score/mean':
@@ -568,7 +570,13 @@ class RayPPOTrainer(object):
             input_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in input_ids]
             sample_inputs.extend(input_texts)
 
-            test_gen_batch = test_batch.pop(['input_ids', 'attention_mask', 'position_ids'])
+            batch_keys=['input_ids', 'attention_mask', 'position_ids']
+            if self.config.actor_rollout_ref.rollout.name=='vllm_multi_turn':
+                non_tensor_batch_keys=['hidden_params']
+            else:
+                non_tensor_batch_keys=None
+
+            test_gen_batch = test_batch.pop(batch_keys=batch_keys, non_tensor_batch_keys=non_tensor_batch_keys)
             test_gen_batch.meta_info = {
                 'eos_token_id': self.tokenizer.eos_token_id,
                 'pad_token_id': self.tokenizer.pad_token_id,
@@ -819,7 +827,12 @@ class RayPPOTrainer(object):
                 batch: DataProto = DataProto.from_single_dict(batch_dict)
 
                 # pop those keys for generation
-                gen_batch = batch.pop(batch_keys=['input_ids', 'attention_mask', 'position_ids'])
+                batch_keys = ['input_ids', 'attention_mask', 'position_ids']
+                if self.config.actor_rollout_ref.rollout.name=='vllm_multi_turn':
+                    non_tensor_batch_keys=['hidden_params']
+                else:
+                    non_tensor_batch_keys=None
+                gen_batch = batch.pop(batch_keys=batch_keys,non_tensor_batch_keys=non_tensor_batch_keys)
 
                 with _timer('step', timing_raw):
                     # generate a batch

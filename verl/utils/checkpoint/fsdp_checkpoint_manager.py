@@ -99,8 +99,8 @@ class FSDPCheckpointManager(BaseCheckpointManager):
 
         # remove previous local_path
         # TODO: shall we remove previous ckpt every save?
-        if remove_previous_ckpt:
-            self.remove_previous_save_local_path()
+        #if remove_previous_ckpt:
+        #    self.remove_previous_save_local_path()
         local_path = self.local_mkdir(local_path)
         torch.distributed.barrier()
 

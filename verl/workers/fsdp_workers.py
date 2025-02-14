@@ -316,6 +316,26 @@ class ActorRolloutRefWorker(Worker):
                                                                full_params='hf' in self.config.rollout.load_format,
                                                                device_mesh=rollout_device_mesh)
             log_gpu_memory_usage('After building sharding manager', logger=None)
+        elif self.config.rollout.name == 'vllm_multi_turn':
+            #assert self.config.rollout
+            from verl.workers.rollout.vllm_rollout import vLLMMultiTurnRollout
+            from verl.workers.sharding_manager import FSDPVLLMShardingManager
+            log_gpu_memory_usage('Before building vllm rollout', logger=None)
+            rollout = vLLMMultiTurnRollout(actor_module=self.actor_module_fsdp,
+                                           config=self.config.rollout,
+                                           tokenizer=self.tokenizer,
+                                           model_hf_config=self.actor_model_config)
+            log_gpu_memory_usage('After building vllm rollout', logger=None)
+            if torch.distributed.get_world_size() == 1:
+                print('Setting load_format to dummy_hf')
+                print("load_format:",self.config.rollout.load_format)
+                self.config.rollout.load_format = 'dummy_hf'
+            rollout_sharding_manager = FSDPVLLMShardingManager(module=self.actor_module_fsdp,
+                                                               inference_engine=rollout.inference_engine,
+                                                               model_config=self.actor_model_config,
+                                                               full_params='hf' in self.config.rollout.load_format,
+                                                               device_mesh=rollout_device_mesh)
+
 
         return rollout, rollout_sharding_manager
 
