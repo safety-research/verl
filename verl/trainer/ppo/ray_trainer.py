@@ -209,8 +209,16 @@ def compute_data_metrics(batch, use_critic=True):
         return_diff_var = torch.var(valid_returns - valid_values)
         return_var = torch.var(valid_returns)
 
-    print("BATCH",batch)
-    print("rs",sequence_reward.shape)
+
+    #calculate per_data_std by grouping by uid
+    uid=batch.non_tensor_batch['uid']
+    sequence_reward_std=[]
+    for uid_ in uid:
+        inds=torch.tensor((uid==uid_),dtype=torch.bool)
+        sequence_reward_=sequence_reward[inds]
+        sequence_reward_std.append(sequence_reward_.std())
+    sequence_reward_std=torch.stack(sequence_reward_std)
+
     metrics = {
         # score
         'critic/score/mean':
@@ -226,6 +234,10 @@ def compute_data_metrics(batch, use_critic=True):
             torch.max(sequence_reward).detach().item(),
         'critic/rewards/min':
             torch.min(sequence_reward).detach().item(),
+        'critic/rewards/std':
+            torch.std(sequence_reward).detach().item(),
+        'critic/rewards/per_data_std':
+            torch.mean(sequence_reward_std).detach().item(),
         # adv
         'critic/advantages/mean':
             torch.mean(valid_adv).detach().item(),
@@ -855,7 +867,7 @@ class RayPPOTrainer(object):
 
                     # recompute old_log_probs
                     with _timer('old_log_prob', timing_raw):
-                        old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
+                        old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)#this is no grad
                         batch = batch.union(old_log_prob)
 
                     if self.use_reference_policy:

@@ -234,6 +234,7 @@ def main_task(config, compute_score=None):
         mapping[Role.RewardModel] = global_pool_id
 
     if hasattr(config.actor_rollout_ref.rollout,"environment"):
+        assert config.actor_rollout_ref.actor.use_loss_generation_mask, "environment rollout requires use_loss_generation_mask"
         reward_fn = RewardEnvironment(config=config,tokenizer=tokenizer, url=config.actor_rollout_ref.rollout.environment.url)
         val_reward_fn = reward_fn
     else:

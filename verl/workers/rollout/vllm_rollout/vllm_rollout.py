@@ -502,8 +502,6 @@ class vLLMMultiTurnRollout(BaseRollout):
         generation_mask = torch.cat([idx_generation_mask, response_generation_mask], dim=-1)
         response_attention_mask = get_eos_mask(response_id=response, eos_token=eos_token_id, dtype=attention_mask.dtype)
         attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
-        print("GENERATION_MASK",generation_mask[0])
-        #assert False
 
         # all the tp ranks should contain the same data here. data in all ranks are valid
         batch = TensorDict(
