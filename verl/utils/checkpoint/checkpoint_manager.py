@@ -15,6 +15,7 @@ import os
 import shutil
 from filelock import FileLock
 import tempfile
+import glob
 
 import torch
 import torch.distributed
@@ -59,17 +60,21 @@ class BaseCheckpointManager:
     def save_checkpoint(self, *args, **kwargs):
         raise NotImplementedError
 
-    def remove_previous_save_local_path(self):
+    def remove_previous_save_local_path(self,optim_only=False):
         if not self.previous_save_local_path:
             return
 
         abs_path = os.path.abspath(self.previous_save_local_path)
         print(f'Checkpoint manager remove previous save local path: {abs_path}')
-        if not os.path.exists(abs_path):
-            return
-
-        # remove previous local_path
-        shutil.rmtree(abs_path, ignore_errors=True)
+        if optim_only:
+            optim_paths=glob.glob(os.path.join(abs_path, 'optim_*.pt'))
+            for optim_path in optim_paths:#just remove the file
+                os.remove(optim_path)
+        else:
+            if not os.path.exists(abs_path):
+                return
+            # remove previous local_path
+            shutil.rmtree(abs_path, ignore_errors=True)
 
     @staticmethod
     def local_mkdir(path):

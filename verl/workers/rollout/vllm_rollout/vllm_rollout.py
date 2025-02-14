@@ -413,11 +413,16 @@ class vLLMMultiTurnRollout(BaseRollout):
                     prompt_token_ids=idx_todo,
                     use_tqdm=False)
             response = output[0].to(idx.device)
-            assert response.shape[1] <= self.config.environment.per_turn_length,"Response too long vllm bug? : "+str(response.shape)
+            assert response.shape[1] <= self.config.environment.per_turn_length,"Response too long from vllm: "+str(response.shape)
 
             #attach model responses to idx_list
             assert len(todo)==len(response)
             for i_batch_sample,response_ in zip(todo,response):
+                if torch.all(response_==self.pad_token_id):
+                    print("ERROR: RESPONSE IS ALL PAD TOKENS")
+                    print(self.tokenizer.decode(idx_list[i_batch_sample],skip_special_tokens=False))
+                    print("###########")
+                    assert False
                 response_no_pad=_remove_trailing_pad_tokens(self.pad_token_id,response_)
                 idx_list[i_batch_sample]+=response_no_pad.tolist()
                 generation_mask[i_batch_sample].append(torch.ones(response_no_pad.size(0),dtype=attention_mask.dtype,device=attention_mask.device))
