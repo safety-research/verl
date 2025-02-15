@@ -67,9 +67,13 @@ class BaseCheckpointManager:
         abs_path = os.path.abspath(self.previous_save_local_path)
         print(f'Checkpoint manager remove previous save local path: {abs_path}')
         if optim_only:
-            optim_paths=glob.glob(os.path.join(abs_path, 'optim_*.pt'))
+            rank=self.rank
+            optim_paths=glob.glob(os.path.join(abs_path, 'optim_*'+f"_rank_{rank}.pt"))
             for optim_path in optim_paths:#just remove the file
-                os.remove(optim_path)
+                if os.path.exists(optim_path):
+                    print(f'Removing {optim_path}')
+                    print("existing:",os.path.exists(optim_path))
+                    os.remove(optim_path)
         else:
             if not os.path.exists(abs_path):
                 return

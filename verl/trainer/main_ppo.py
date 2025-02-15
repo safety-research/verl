@@ -133,7 +133,6 @@ class RewardEnvironment():
             text.append(text_)
             hidden_params.append(hidden_params_)
             reward_locs.append(valid_response_length - 1)
-
         url = self.url+"/get_reward"
         payload = {
             "text": text,

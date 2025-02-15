@@ -35,7 +35,7 @@ import requests
 import numpy as np
 
 from verl import DataProto
-from verl.utils.torch_functional import get_eos_mask, pad_sequence_to_length
+from verl.utils.torch_functional import get_eos_mask, get_final_eos_mask, pad_sequence_to_length
 from verl.workers.rollout.base import BaseRollout
 from verl.third_party.vllm import LLM, vllm_version
 from verl.third_party.vllm import parallel_state as vllm_ps
@@ -358,6 +358,10 @@ class vLLMMultiTurnRollout(BaseRollout):
         if self.config.free_cache_engine:
             self.inference_engine.init_cache_engine()
         hidden_params = prompts.non_tensor_batch['hidden_params'].tolist()
+        for hidden_params_ in hidden_params:
+            for key in hidden_params_:
+                if isinstance(hidden_params_[key], np.ndarray):
+                    hidden_params_[key] = hidden_params_[key].tolist()
         url = self.config.environment.url+"/get_env_response"
         tokenizer_n_skip_messages = self.config.environment.tokenizer_n_skip_messages
         tokenizer_message_end_id = self.config.environment.tokenizer_message_end_id
@@ -419,10 +423,8 @@ class vLLMMultiTurnRollout(BaseRollout):
             assert len(todo)==len(response)
             for i_batch_sample,response_ in zip(todo,response):
                 if torch.all(response_==self.pad_token_id):
-                    print("ERROR: RESPONSE IS ALL PAD TOKENS")
-                    print(self.tokenizer.decode(idx_list[i_batch_sample],skip_special_tokens=False))
-                    print("###########")
-                    assert False
+                    todo.remove(i_batch_sample)
+                    continue
                 response_no_pad=_remove_trailing_pad_tokens(self.pad_token_id,response_)
                 idx_list[i_batch_sample]+=response_no_pad.tolist()
                 generation_mask[i_batch_sample].append(torch.ones(response_no_pad.size(0),dtype=attention_mask.dtype,device=attention_mask.device))
@@ -438,6 +440,9 @@ class vLLMMultiTurnRollout(BaseRollout):
                 "text": text_todo,
                 "hidden_params": hidden_params_todo
             }
+            #print("payload_text_type:",type(payload["text"]),type(payload["text"][0]),"payload_hidden_params_type:",type(payload["hidden_params"]),type(payload["hidden_params"][0]))
+            #for key,item in payload["hidden_params"][0].items():
+            #    print(key,type(item))
             env_response = requests.post(url, json=payload).json()
 
             #process environment response
@@ -503,10 +508,15 @@ class vLLMMultiTurnRollout(BaseRollout):
         #print("POSITION_IDS.SHAPE",position_ids.shape)
         #print("POSITION_IDS[0]",position_ids[0])
         #print("POSITION_IDS",position_ids)
-        #
+        
         generation_mask = torch.cat([idx_generation_mask, response_generation_mask], dim=-1)
-        response_attention_mask = get_eos_mask(response_id=response, eos_token=eos_token_id, dtype=attention_mask.dtype)
+        response_attention_mask = get_final_eos_mask(response_id=response, eos_token=eos_token_id, dtype=attention_mask.dtype)
         attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
+        #print("ATTENTION_MASK.0",attention_mask[0].tolist())
+        #print("GENERATION_MASK.0",generation_mask[0].tolist())
+        #print first seq
+        #print("SEQ.0",self.tokenizer.decode(seq[0].tolist(),skip_special_tokens=False))
+
 
         # all the tp ranks should contain the same data here. data in all ranks are valid
         batch = TensorDict(
