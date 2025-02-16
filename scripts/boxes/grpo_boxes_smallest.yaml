@@ -1,0 +1,79 @@
+data:
+  tokenizer: null
+  train_files: ./data/datasets/boxes/smallest_train.parquet
+  val_files: ./data/datasets/boxes/smallest_test.parquet
+  prompt_key: prompt
+  max_prompt_length: 512
+  max_response_length: 2048
+  train_batch_size: 64
+  val_batch_size: 64
+  return_raw_chat: False
+  shuffle: True
+
+actor_rollout_ref:
+  model:
+    path: Qwen/Qwen2.5-0.5B-Instruct
+    enable_gradient_checkpointing: True
+    use_remove_padding: True
+  actor:
+    ppo_mini_batch_size: 256
+    ppo_micro_batch_size_per_gpu: 8
+    use_dynamic_bsz: True
+    ppo_max_token_len_per_gpu: 16384
+    grad_clip: 1.0
+    clip_ratio: 0.2
+    entropy_coeff: 0.001
+    use_kl_loss: True
+    kl_loss_coef: 0.001
+    kl_loss_type: low_var_kl
+    ppo_epochs: 1
+    optim:
+      lr: 1e-6
+      lr_warmup_steps_ratio: 0.
+      min_lr_ratio: null
+      warmup_style: constant
+      total_training_steps: -1
+    fsdp_config:
+      param_offload: False
+      grad_offload: False
+      optimizer_offload: False
+  ref:
+    fsdp_config:
+      param_offload: True
+  rollout:
+    name: vllm
+    temperature: 1.0
+    top_k: -1
+    top_p: 1
+    prompt_length: 512
+    response_length: 2048
+    dtype: bfloat16
+    gpu_memory_utilization: 0.6
+    tensor_model_parallel_size: 1
+    max_num_batched_tokens: 8192
+    max_num_seqs: 1024
+    log_prob_micro_batch_size_per_gpu: 8
+    log_prob_use_dynamic_bsz: True
+    log_prob_max_token_len_per_gpu: 16384
+    disable_log_stats: True
+    enable_chunked_prefill: True
+    do_sample: True
+    n: 8
+
+algorithm:
+  kl_ctrl:
+    kl_coef: 0.001
+  adv_estimator: grpo
+
+trainer:
+  total_epochs: 8
+  project_name: verl_grpo_boxes
+  experiment_name: qwen-2.5_0.5b-instruct-boxes-smallest-v1
+  logger: [ 'console', 'wandb' ]
+  val_before_train: False
+  nnodes: 1
+  n_gpus_per_node: 2
+  save_freq: 10
+  test_freq: 10
+  critic_warmup: 0
+  default_local_dir: ./data/verl/${trainer.project_name}/${trainer.experiment_name}
