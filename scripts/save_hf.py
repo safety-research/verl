@@ -7,8 +7,6 @@ import torch
 import numpy as np
 import tqdm
 
-
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('state_dict_path', type=str)
