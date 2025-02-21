@@ -209,15 +209,14 @@ def compute_data_metrics(batch, use_critic=True):
         return_diff_var = torch.var(valid_returns - valid_values)
         return_var = torch.var(valid_returns)
 
-
     #calculate per_data_std by grouping by uid
-    uid=batch.non_tensor_batch['uid']
-    sequence_reward_std=[]
+    uid = batch.non_tensor_batch['uid']
+    sequence_reward_std = []
     for uid_ in uid:
-        inds=torch.tensor((uid==uid_),dtype=torch.bool)
-        sequence_reward_=sequence_reward[inds]
+        inds = torch.tensor((uid == uid_), dtype=torch.bool)
+        sequence_reward_ = sequence_reward[inds]
         sequence_reward_std.append(sequence_reward_.std())
-    sequence_reward_std=torch.stack(sequence_reward_std)
+    sequence_reward_std = torch.stack(sequence_reward_std)
 
     metrics = {
         # score
@@ -327,6 +326,7 @@ class RayPPOTrainer(object):
                  role_worker_mapping: dict[Role, WorkerType],
                  resource_pool_manager: ResourcePoolManager,
                  ray_worker_group_cls: RayWorkerGroup = RayWorkerGroup,
+                 environment=None,
                  reward_fn=None,
                  val_reward_fn=None):
 
@@ -334,6 +334,7 @@ class RayPPOTrainer(object):
 
         self.tokenizer = tokenizer
         self.config = config
+        self.environment = environment
         self.reward_fn = reward_fn
         self.val_reward_fn = val_reward_fn
 
@@ -582,11 +583,11 @@ class RayPPOTrainer(object):
             input_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in input_ids]
             sample_inputs.extend(input_texts)
 
-            batch_keys=['input_ids', 'attention_mask', 'position_ids']
-            if self.config.actor_rollout_ref.rollout.name=='vllm_multi_turn':
-                non_tensor_batch_keys=['hidden_params']
+            batch_keys = ['input_ids', 'attention_mask', 'position_ids']
+            if self.config.actor_rollout_ref.rollout.name in ['vllm_multi_turn', 'vllm_multi_turn_via_chat']:
+                non_tensor_batch_keys = ['env_params', 'raw_prompt']
             else:
-                non_tensor_batch_keys=None
+                non_tensor_batch_keys = None
 
             test_gen_batch = test_batch.pop(batch_keys=batch_keys, non_tensor_batch_keys=non_tensor_batch_keys)
             test_gen_batch.meta_info = {
@@ -599,7 +600,8 @@ class RayPPOTrainer(object):
 
             # pad to be divisible by dp_size
             test_gen_batch_padded, pad_size = pad_dataproto_to_divisor(test_gen_batch, self.actor_rollout_wg.world_size)
-            test_output_gen_batch_padded = self.actor_rollout_wg.generate_sequences(test_gen_batch_padded)
+            test_output_gen_batch_padded = self.actor_rollout_wg.generate_sequences(
+                test_gen_batch_padded)  #,environment=self.environment)#We can't do this yet
             # unpad
             test_output_gen_batch = unpad_dataproto(test_output_gen_batch_padded, pad_size=pad_size)
             print('validation generation end')
@@ -840,16 +842,17 @@ class RayPPOTrainer(object):
 
                 # pop those keys for generation
                 batch_keys = ['input_ids', 'attention_mask', 'position_ids']
-                if self.config.actor_rollout_ref.rollout.name=='vllm_multi_turn':
-                    non_tensor_batch_keys=['hidden_params']
+                if self.config.actor_rollout_ref.rollout.name in ['vllm_multi_turn', 'vllm_multi_turn_via_chat']:
+                    non_tensor_batch_keys = ['env_params', "raw_prompt"]
                 else:
-                    non_tensor_batch_keys=None
-                gen_batch = batch.pop(batch_keys=batch_keys,non_tensor_batch_keys=non_tensor_batch_keys)
+                    non_tensor_batch_keys = None
+                gen_batch = batch.pop(batch_keys=batch_keys, non_tensor_batch_keys=non_tensor_batch_keys)
 
                 with _timer('step', timing_raw):
                     # generate a batch
                     with _timer('gen', timing_raw):
-                        gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
+                        gen_batch_output = self.actor_rollout_wg.generate_sequences(
+                            gen_batch)  #,environment=self.environment)#We can't do this yet
 
                     batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))],
                                                              dtype=object)
@@ -867,7 +870,7 @@ class RayPPOTrainer(object):
 
                     # recompute old_log_probs
                     with _timer('old_log_prob', timing_raw):
-                        old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)#this is no grad
+                        old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)  #this is no grad
                         batch = batch.union(old_log_prob)
 
                     if self.use_reference_policy:

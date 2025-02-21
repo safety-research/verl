@@ -10,7 +10,7 @@ import tqdm
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('state_dict_path', type=str)
-    parser.add_argument('--model_name', type=str,default="Qwen/Qwen2.5-0.5B-Instruct")
+    parser.add_argument('--model_name', type=str,default="Qwen/Qwen2.5-3B-Instruct")
     parser.add_argument('--save_path', type=str,default=None)
     parser.add_argument('--push_name', type=str,default=None)
     args = parser.parse_args()

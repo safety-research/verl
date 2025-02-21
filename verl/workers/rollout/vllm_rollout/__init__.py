@@ -12,4 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .vllm_rollout import vLLMRollout, vLLMMultiTurnRollout
+from .vllm_rollout import vLLMRollout, vLLMMultiTurnViaChatRollout

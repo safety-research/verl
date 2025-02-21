@@ -17,6 +17,7 @@ Contain small python utility functions
 
 from typing import Dict
 from types import SimpleNamespace
+import numpy as np
 
 
 def union_two_dict(dict1: Dict, dict2: Dict):
@@ -54,3 +55,12 @@ class NestedNamespace(SimpleNamespace):
                 self.__setattr__(key, NestedNamespace(value))
             else:
                 self.__setattr__(key, value)
+
+
+
+def to_1d_np_array(list_of_objects):
+    n=len(list_of_objects)
+    array=np.empty(n,dtype=object)
+    for i in range(n):
+        array[i]=list_of_objects[i]
+    return array

@@ -36,6 +36,8 @@ import numpy as np
 
 from verl import DataProto
 from verl.utils.torch_functional import get_eos_mask, get_final_eos_mask, pad_sequence_to_length
+#from verl.utils.py_functional import recursive_all_np_to_list
+from verl.utils.py_functional import to_1d_np_array
 from verl.workers.rollout.base import BaseRollout
 from verl.third_party.vllm import LLM, vllm_version
 from verl.third_party.vllm import parallel_state as vllm_ps
@@ -72,14 +74,21 @@ def _remove_prepending_messages(token_ids: torch.Tensor, message_end_id: int, n_
         assert False,"Not enough messages"
     return token_ids[message_end_locs[n_skip_messages-1]+1:]
 
-def pad_to_max_stack(tensor_list: List[torch.Tensor], pad_token_id: int, dim: int) -> torch.Tensor:
+def pad_to_max_stack(tensor_list: List[torch.Tensor], pad_token_id: int) -> torch.Tensor:
     assert all([t.ndim==1 for t in tensor_list])
     max_len=max([t.size(0) for t in tensor_list])
     padded_tensor_list=[]
     for t in tensor_list:
         padded_tensor_list.append(torch.cat([t,torch.tensor([pad_token_id]*(max_len-t.size(0)),device=t.device,dtype=t.dtype)],dim=0))
-    return torch.stack(padded_tensor_list,dim=dim)
+    return torch.stack(padded_tensor_list,dim=0)
 
+"""
+def dict_element_tolist(env_params):
+    for key in env_params:
+        if isinstance(env_params[key], np.ndarray):
+            env_params[key] = env_params[key].tolist()
+    return env_params
+"""
 
 class vLLMRollout(BaseRollout):
 
@@ -258,7 +267,7 @@ class vLLMRollout(BaseRollout):
 
         return DataProto(batch=batch)
 
-class vLLMMultiTurnRollout(BaseRollout):
+class vLLMMultiTurnViaChatRollout(BaseRollout):
 
     def __init__(self, actor_module: nn.Module, config: DictConfig, tokenizer, model_hf_config, **kwargs):
         """A vLLM rollout. It requires the module is supported by the vllm.
@@ -328,7 +337,9 @@ class vLLMMultiTurnRollout(BaseRollout):
         for k in config.keys():
             if hasattr(SamplingParams(), str(k)):
                 kwargs[k] = config.get(k)
-        #This is multi turn, so we need to set n=1 for sampling params
+        
+        #Important:
+        #This is multi turn, so we need to set n=1 for sampling params, as we will manually batch n since some samplings might terminate earlier.
         kwargs['n']=1
 
         #print(f"kwargs: {kwargs}")
@@ -352,26 +363,51 @@ class vLLMMultiTurnRollout(BaseRollout):
         for key, value in old_sampling_params_args.items():
             setattr(self.sampling_params, key, value)
 
+    def get_n_tokens(self,prompt,add_generation_prompt=False):
+        return len(self.tokenizer.apply_chat_template(prompt,tokenize=True,add_generation_prompt=add_generation_prompt))
+    
+    def tokenize_with_assistant_mask(self,messages):
+        n_messages=len(messages)
+        tokenized_messages=self.tokenizer.apply_chat_template(messages,tokenize=True,add_generation_prompt=False)
+        head=0
+        assistant_mask=[]
+        for i_last_message in range(n_messages):
+            if (i_last_message!=n_messages-1) and (messages[i_last_message+1]["role"]=="assistant"):
+                is_next_assistant=True
+            else:
+                is_next_assistant=False
+            last_message_role=messages[i_last_message]["role"]
+            n_tokens_with_last_message=self.get_n_tokens(messages[:i_last_message+1],add_generation_prompt=is_next_assistant)
+            n_add=n_tokens_with_last_message-head
+            if last_message_role=="assistant":
+                assistant_mask.append(torch.ones(n_add,dtype=torch.bool))
+            else:
+                assistant_mask.append(torch.zeros(n_add,dtype=torch.bool))
+            head+=n_add
+        assistant_mask=torch.cat(assistant_mask,dim=0)
+        assert len(assistant_mask)==len(tokenized_messages), "Bug: assistant mask length mismatch"
+        return tokenized_messages,assistant_mask
+
     @torch.no_grad()
-    def generate_sequences(self, prompts: DataProto, **kwargs) -> DataProto:
+    def generate_sequences(self, prompts: DataProto,**kwargs)->DataProto:#, environment, **kwargs) -> DataProto: #see verl/single_controller/base/decorator l.54, we can't send these classes as usual.
         # rebuild vllm cache engine
+        #assert environment is not None, "Environment is required for multi-turn rollout"
         if self.config.free_cache_engine:
             self.inference_engine.init_cache_engine()
-        hidden_params = prompts.non_tensor_batch['hidden_params'].tolist()
-        for hidden_params_ in hidden_params:
-            for key in hidden_params_:
-                if isinstance(hidden_params_[key], np.ndarray):
-                    hidden_params_[key] = hidden_params_[key].tolist()
-        url = self.config.environment.url+"/get_env_response"
-        tokenizer_n_skip_messages = self.config.environment.tokenizer_n_skip_messages
-        tokenizer_message_end_id = self.config.environment.tokenizer_message_end_id
 
-        idx=prompts.batch['input_ids']
+
+        idx=prompts.batch['input_ids']#just for device, size
         batch_size = idx.size(0)
+
+        #environment
+        env_params = prompts.non_tensor_batch['env_params'].tolist()
+        assert len(env_params)==batch_size, "This bug should be fixed, but didn't try different multi processing settings"
+
         attention_mask=prompts.batch['attention_mask']
         idx_generation_mask=torch.zeros_like(idx,dtype=attention_mask.dtype,device=attention_mask.device)
         position_ids=prompts.batch['position_ids']
-        eos_token_id = prompts.meta_info['eos_token_id']
+        #eos_token_id = prompts.meta_info['eos_token_id']
+        eos_token_id=self.tokenizer.eos_token_id# the meta_info's eos_token_id is is from config and usually includes the pad token, which we don't want when having multiple messages see  get_final_eos_mask to understand this
 
         do_sample = prompts.meta_info.get('do_sample', True)
         if not do_sample:
@@ -384,99 +420,114 @@ class vLLMMultiTurnRollout(BaseRollout):
                 'n': 1  # if greedy, only 1 response
             }
 
+        raw_prompt=prompts.non_tensor_batch['raw_prompt']
+        rank=vllm_ps.get_tensor_model_parallel_src_rank()
+        #if rank==0:
+        #    print("RAW_PROMPT:",raw_prompt)
+        #    print("RAW_PROMPT_LEN:",len(raw_prompt))
+        #    print("ENV_PARAMS_LEN:",len(env_params))
+        #    print("BATCH_SIZE:",batch_size)
+        #    print("IDX_TYPE:",type(idx))
+        #    print("IDX",idx[:,0])
+        #    assert len(raw_prompt)==batch_size, "This bug should be fixed, but didn't try different multi processing settings"
+        
         n=1 if prompts.meta_info.get('validate',False) else self.config.n
+
         todo=list(range(batch_size*n))#manually batch n
-        #print("batch_size:",batch_size)
-        idx_list = []
-        generation_mask=[]
+        messagess=[]
+        env_paramss=[]
         prefix_lengths=[]
-        # parse idx from torch.Tensor to List[List[int]]
         for i_batch in range(batch_size):
-            input_ids = _pre_process_inputs(self.pad_token_id, idx[i_batch])
-            prefix_length=len(input_ids)
-            for _ in range(n):#manually batch n
-                idx_list.append(input_ids.copy())#make sure to copy since we will be appending to it
-                prefix_lengths.append(prefix_length)
-                generation_mask.append([torch.zeros(prefix_length,dtype=attention_mask.dtype,device=attention_mask.device)])
-        hidden_params_=[]
-        for i_batch in range(batch_size):
+            raw_prompt_i_batch=raw_prompt[i_batch]
+            n_tokens_prefix=self.get_n_tokens(raw_prompt_i_batch,add_generation_prompt=True)
+            #if rank==0:
+            #    print("PROMPT",raw_prompt_i_batch,"N_TOKENS:",n_tokens)
             for _ in range(n):
-                hidden_params_.append(hidden_params[i_batch].copy())
-        hidden_params=hidden_params_
+                messagess.append(raw_prompt_i_batch.copy())
+                env_paramss.append(env_params[i_batch].copy())
+                prefix_lengths.append(n_tokens_prefix)
 
         while True:
             #Prepare inputs to generate response from
-            idx_todo=[]
+            messagess_todo=[]
             for i_batch_sample in todo:
-                idx_todo.append(idx_list[i_batch_sample])
+                messages_=[{"role":msg["role"],"content":msg["content"]} for msg in messagess[i_batch_sample]]
+                messagess_todo.append(messages_)
             with self.update_sampling_params(**kwargs):
                 assert self.sampling_params.n==1,"n should be 1 for multi-turn"
-                output = self.inference_engine.generate(
-                    prompts=None,  # because we have already convert it to prompt token id
+                output = self.inference_engine.chat(
+                    messages=messagess_todo,
                     sampling_params=self.sampling_params,
-                    prompt_token_ids=idx_todo,
                     use_tqdm=False)
             response = output[0].to(idx.device)
-            assert response.shape[1] <= self.config.environment.per_turn_length,"Response too long from vllm: "+str(response.shape)
+            assert response.shape[1] <= self.config.environment.per_turn_length,"Bug: response too long from vllm: "+str(response.shape)
 
-            #attach model responses to idx_list
+            #trim responses
             assert len(todo)==len(response)
             for i_batch_sample,response_ in zip(todo,response):
-                if torch.all(response_==self.pad_token_id):
+                response_text=self.tokenizer.decode(response_,skip_special_tokens=True)
+                messagess[i_batch_sample].append({"role":"assistant","content":response_text})
+                """
+                if torch.all(response_==self.pad_token_id):#some failure case
+                    messagess[i_batch_sample].append({"role":"assistant","content":""})
                     todo.remove(i_batch_sample)
                     continue
                 response_no_pad=_remove_trailing_pad_tokens(self.pad_token_id,response_)
-                idx_list[i_batch_sample]+=response_no_pad.tolist()
-                generation_mask[i_batch_sample].append(torch.ones(response_no_pad.size(0),dtype=attention_mask.dtype,device=attention_mask.device))
-
-            #prepare interaction with environment
-            text_todo=[]
-            for i_batch_sample in todo:
-                text_todo.append(self.tokenizer.decode(idx_list[i_batch_sample],skip_special_tokens=False))
-            hidden_params_todo=[hidden_params[i_batch_sample] for i_batch_sample in todo]
-
+                response_text=self.tokenizer.decode(response_no_pad.tolist(),skip_special_tokens=True)#remove <|im_end|>
+                #if rank==0:
+                #    print("MESSAGES:",messagess[i_batch_sample])
+                #    print("Gen response text:",response_text)
+                messagess[i_batch_sample].append({"role":"assistant","content":response_text})
+                """
             #interact with environment
+            messagess_todo=[]
+            env_paramss_todo=[]
+            for i_batch_sample in todo:
+                messagess_todo.append(messagess[i_batch_sample])
+                env_paramss_todo.append(env_paramss[i_batch_sample])
+
+            #We can't do thus yet:
+            #env_response_batched=environment.get_response_batched(messages_batched=messagess_todo,env_params_batched=env_paramss_todo)
+            #So we hardcode it for now:
             payload = {
-                "text": text_todo,
-                "hidden_params": hidden_params_todo
+                "messages_batched": messagess_todo,
+                "env_params_batched": env_paramss_todo
             }
-            #print("payload_text_type:",type(payload["text"]),type(payload["text"][0]),"payload_hidden_params_type:",type(payload["hidden_params"]),type(payload["hidden_params"][0]))
-            #for key,item in payload["hidden_params"][0].items():
-            #    print(key,type(item))
-            env_response = requests.post(url, json=payload).json()
+            url = self.config.environment.url+"/get_env_response_batched"
+            env_response_batched = requests.post(url, json=payload).json()
+
 
             #process environment response
             todo_=todo.copy()#make a copy since we will be modifying todo
-            assert len(todo_)==len(env_response)
-            for i_batch_sample,env_response_ in zip(todo_,env_response):
-                if env_response_["env_response_message"] is None:
-                    #format error, remove
+            assert len(todo_)==len(env_response_batched)
+            for i_batch_sample,env_response in zip(todo_,env_response_batched):
+                assert env_response["role"]=="user"
+                messagess[i_batch_sample].append(env_response)
+                #if rank==0:
+                #    print("MESSAGES:",messagess[i_batch_sample])
+                n_tokens=self.get_n_tokens(messagess[i_batch_sample],add_generation_prompt=True)
+                if n_tokens>=(self.total_length-self.config.environment.per_turn_length):#remove if the total number of tokens goes too long
                     todo.remove(i_batch_sample)
                     continue
-                env_response_message=env_response_["env_response_message"]
-                assert env_response_message["role"]=="user"
-                token_ids=self.tokenizer.apply_chat_template([env_response_message],tokenize=True,add_generation_prompt=True,return_tensors="pt")[0]
-                token_ids=_remove_prepending_messages(token_ids,tokenizer_message_end_id,tokenizer_n_skip_messages).tolist()
-                idx_list[i_batch_sample]+=token_ids#this might go over response length, but we will cut it later
-                generation_mask[i_batch_sample].append(torch.zeros(len(token_ids),dtype=attention_mask.dtype,device=attention_mask.device))
-                if len(idx_list[i_batch_sample])>=(self.total_length-self.config.environment.per_turn_length):
-                    todo.remove(i_batch_sample)
-                    continue
-                if env_response_message["done"]:
+                if env_response["done"]:
                     todo.remove(i_batch_sample)
             
             #break if all done
             if len(todo)==0:
                 break
+            #print("TODO LEFT",len(todo))
 
-        #re-build response
+        #re-build response in the same format as normal rollout
+        #only need idx_list, generation_mask, and prompt_lengths
         response=[]
         response_generation_mask=[]
         for i_batch_sample in range(batch_size*n):
-            response.append(torch.tensor(idx_list[i_batch_sample][prefix_lengths[i_batch_sample]:],device=idx.device,dtype=idx.dtype))
-            response_generation_mask.append(torch.cat(generation_mask[i_batch_sample][1:],dim=0))#skip the prefix
-        response=pad_to_max_stack(response,self.pad_token_id,dim=0)
-        response_generation_mask=pad_to_max_stack(response_generation_mask,0,dim=0)
+            token_ids,assistant_mask=self.tokenize_with_assistant_mask(messagess[i_batch_sample])
+            response.append(torch.tensor(token_ids[prefix_lengths[i_batch_sample]:],device=idx.device,dtype=idx.dtype))
+            response_generation_mask.append(assistant_mask[prefix_lengths[i_batch_sample]:].to(device=attention_mask.device,dtype=attention_mask.dtype))
+            #eos_token_id,
+        response=pad_to_max_stack(response,self.pad_token_id)
+        response_generation_mask=pad_to_max_stack(response_generation_mask,0)
         #assert same shape
         assert all([response.size(dim)==response_generation_mask.size(dim) for dim in range(response.ndim)])
 
@@ -489,6 +540,7 @@ class vLLMMultiTurnRollout(BaseRollout):
             response_generation_mask = pad_sequence_to_length(response_generation_mask, self.config.response_length, 0)
         #print("RESPONSE.SHAPE_2:",response.shape)
         #print("CONFIG.N:",self.config.n,"DO_SAMPLE:",do_sample)
+
         if self.config.n > 1 and do_sample:
             idx = idx.repeat_interleave(self.config.n, dim=0)
             idx_generation_mask = idx_generation_mask.repeat_interleave(self.config.n, dim=0)
@@ -512,10 +564,11 @@ class vLLMMultiTurnRollout(BaseRollout):
         generation_mask = torch.cat([idx_generation_mask, response_generation_mask], dim=-1)
         response_attention_mask = get_final_eos_mask(response_id=response, eos_token=eos_token_id, dtype=attention_mask.dtype)
         attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
-        #print("ATTENTION_MASK.0",attention_mask[0].tolist())
-        #print("GENERATION_MASK.0",generation_mask[0].tolist())
-        #print first seq
-        #print("SEQ.0",self.tokenizer.decode(seq[0].tolist(),skip_special_tokens=False))
+        #if rank==0:
+        #    print("SEQ.0",self.tokenizer.decode(seq[0].tolist(),skip_special_tokens=False))
+        #    print("ATTMASK.0",attention_mask[0].tolist())
+        #    print("GENMASK.0",generation_mask[0].tolist())
+        #    assert False
 
 
         # all the tp ranks should contain the same data here. data in all ranks are valid
@@ -530,7 +583,8 @@ class vLLMMultiTurnRollout(BaseRollout):
             },
             batch_size=batch_size)
         non_tensor_batch = {
-            'hidden_params': np.array(hidden_params)
+            'messages': to_1d_np_array(messagess),
+            'env_params': to_1d_np_array(env_paramss)
         }
 
         # free vllm cache engine
@@ -538,3 +592,4 @@ class vLLMMultiTurnRollout(BaseRollout):
             self.inference_engine.free_cache_engine()
 
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
+

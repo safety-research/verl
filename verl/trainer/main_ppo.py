@@ -21,7 +21,8 @@ from verl.utils.reward_score import gsm8k, math, boxes, guessnumber
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 import requests
 
-def _default_compute_score(config,data_source, solution_str, ground_truth):
+
+def _default_compute_score(config, data_source, solution_str, ground_truth):
     if data_source == 'openai/gsm8k':
         return gsm8k.compute_score(solution_str, ground_truth)
     elif data_source in ['lighteval/MATH', 'DigitalLearningGmbH/MATH-lighteval']:
@@ -103,50 +104,6 @@ class RewardManager():
         return reward_tensor
 
 
-class RewardEnvironment():
-    def __init__(self, config, tokenizer, url):
-        self.config = config
-        self.tokenizer = tokenizer
-        self.url = url
-
-    def __call__(self, data: DataProto):
-        text=[]
-        hidden_params=[]
-        reward_locs=[]
-        for i in range(len(data)):
-            data_item = data[i]  # DataProtoItem
-            attention_mask = data_item.batch['attention_mask']
-            prompt_ids = data_item.batch['prompts']
-            response_ids = data_item.batch['responses']
-            hidden_params_ = data_item.non_tensor_batch['hidden_params']
-
-            prompt_length = prompt_ids.shape[-1]
-            valid_prompt_length = attention_mask[:prompt_length].sum()
-            valid_prompt_ids = prompt_ids[-valid_prompt_length:]
-
-            valid_response_length = attention_mask[prompt_length:].sum()
-            valid_response_ids = response_ids[:valid_response_length]
-
-            # decode
-            sequences = torch.cat((valid_prompt_ids, valid_response_ids))
-            text_ = self.tokenizer.decode(sequences, skip_special_tokens=False)
-            text.append(text_)
-            hidden_params.append(hidden_params_)
-            reward_locs.append(valid_response_length - 1)
-        url = self.url+"/get_reward"
-        payload = {
-            "text": text,
-            "hidden_params": hidden_params,
-        }
-        response = requests.post(url, json=payload).json()
-        reward=response['reward']
-
-        reward_tensor = torch.zeros_like(data.batch['responses'], dtype=torch.float32)
-        for i in range(len(data)):
-            reward_tensor[i, reward_locs[i]] = reward[i]
-        return reward_tensor
-
-
 import ray
 """
 import hydra
@@ -155,6 +112,7 @@ import hydra
 def main(config):
     run_ppo(config)
 """
+
 
 def run_ppo(config, compute_score=None):
     if not ray.is_initialized():
@@ -232,35 +190,51 @@ def main_task(config, compute_score=None):
         role_worker_mapping[Role.RewardModel] = ray.remote(RewardModelWorker)
         mapping[Role.RewardModel] = global_pool_id
 
-    if hasattr(config.actor_rollout_ref.rollout,"environment"):
+    use_environment = hasattr(config.actor_rollout_ref.rollout, "environment")
+    if use_environment:
         assert config.actor_rollout_ref.actor.use_loss_generation_mask, "environment rollout requires use_loss_generation_mask"
-        reward_fn = RewardEnvironment(config=config,tokenizer=tokenizer, url=config.actor_rollout_ref.rollout.environment.url)
-        val_reward_fn = reward_fn
+        environment_name = config.actor_rollout_ref.rollout.environment.name
+        if environment_name == "url_environment":
+            from verl.environments import URLEnvironment
+            environment = URLEnvironment(config=config, tokenizer=tokenizer)
+        else:
+            raise NotImplementedError(f"environment {environment_name} not implemented")
+
+        resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
+
+        trainer = RayPPOTrainer(config=config,
+                                tokenizer=tokenizer,
+                                role_worker_mapping=role_worker_mapping,
+                                resource_pool_manager=resource_pool_manager,
+                                ray_worker_group_cls=ray_worker_group_cls,
+                                environment=environment,
+                                reward_fn=environment.get_reward_batched,
+                                val_reward_fn=environment.get_reward_batched)
     else:
-        reward_fn = RewardManager(config=config,tokenizer=tokenizer, num_examine=0, compute_score=compute_score)
+        reward_fn = RewardManager(config=config, tokenizer=tokenizer, num_examine=0, compute_score=compute_score)
         # Note that we always use function-based RM for validation
-        val_reward_fn = RewardManager(config=config,tokenizer=tokenizer, num_examine=1, compute_score=compute_score)
+        val_reward_fn = RewardManager(config=config, tokenizer=tokenizer, num_examine=1, compute_score=compute_score)
 
-    resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
+        resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
 
-    trainer = RayPPOTrainer(config=config,
-                            tokenizer=tokenizer,
-                            role_worker_mapping=role_worker_mapping,
-                            resource_pool_manager=resource_pool_manager,
-                            ray_worker_group_cls=ray_worker_group_cls,
-                            reward_fn=reward_fn,
-                            val_reward_fn=val_reward_fn)
+        trainer = RayPPOTrainer(config=config,
+                                tokenizer=tokenizer,
+                                role_worker_mapping=role_worker_mapping,
+                                resource_pool_manager=resource_pool_manager,
+                                ray_worker_group_cls=ray_worker_group_cls,
+                                reward_fn=reward_fn,
+                                val_reward_fn=val_reward_fn)
+
     trainer.init_workers()
     trainer.fit()
+
 
 def main():
     import argparse
     import os
     from omegaconf import OmegaConf
 
-    parser = argparse.ArgumentParser(
-        description="Run PPO training with config overrides from a YAML file."
-    )
+    parser = argparse.ArgumentParser(description="Run PPO training with config overrides from a YAML file.")
     parser.add_argument(
         "override_yaml",
         type=str,
@@ -268,13 +242,9 @@ def main():
     )
     args = parser.parse_args()
 
-    default_config_path = os.path.join(
-        os.path.dirname(__file__), "config", "ppo_trainer.yaml"
-    )
+    default_config_path = os.path.join(os.path.dirname(__file__), "config", "ppo_trainer.yaml")
     if not os.path.exists(default_config_path):
-        raise FileNotFoundError(
-            f"Default configuration file not found at {default_config_path}"
-        )
+        raise FileNotFoundError(f"Default configuration file not found at {default_config_path}")
 
     # Load the default configuration
     default_cfg = OmegaConf.load(default_config_path)

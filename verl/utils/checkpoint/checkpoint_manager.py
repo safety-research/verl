@@ -60,19 +60,19 @@ class BaseCheckpointManager:
     def save_checkpoint(self, *args, **kwargs):
         raise NotImplementedError
 
-    def remove_previous_save_local_path(self,optim_only=False):
+    def remove_previous_save_local_path(self, optim_only=False):
         if not self.previous_save_local_path:
             return
 
         abs_path = os.path.abspath(self.previous_save_local_path)
         print(f'Checkpoint manager remove previous save local path: {abs_path}')
         if optim_only:
-            rank=self.rank
-            optim_paths=glob.glob(os.path.join(abs_path, 'optim_*'+f"_rank_{rank}.pt"))
-            for optim_path in optim_paths:#just remove the file
+            rank = self.rank
+            optim_paths = glob.glob(os.path.join(abs_path, 'optim_*' + f"_rank_{rank}.pt"))
+            for optim_path in optim_paths:  #just remove the file
                 if os.path.exists(optim_path):
                     print(f'Removing {optim_path}')
-                    print("existing:",os.path.exists(optim_path))
+                    print("existing:", os.path.exists(optim_path))
                     os.remove(optim_path)
         else:
             if not os.path.exists(abs_path):

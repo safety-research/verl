@@ -299,14 +299,27 @@ class ActorRolloutRefWorker(Worker):
             rollout = HFRollout(module=self.actor_module_fsdp, config=self.config.rollout)
             rollout_sharding_manager = BaseShardingManager()
             # TODO: a sharding manager that do nothing?
-        elif self.config.rollout.name == 'vllm':
-            from verl.workers.rollout.vllm_rollout import vLLMRollout
+        elif 'vllm' in self.config.rollout.name:
             from verl.workers.sharding_manager import FSDPVLLMShardingManager
             log_gpu_memory_usage('Before building vllm rollout', logger=None)
-            rollout = vLLMRollout(actor_module=self.actor_module_fsdp,
-                                  config=self.config.rollout,
-                                  tokenizer=self.tokenizer,
-                                  model_hf_config=self.actor_model_config)
+            if self.config.rollout.name == 'vllm':
+                from verl.workers.rollout.vllm_rollout import vLLMRollout
+                rollout = vLLMRollout(actor_module=self.actor_module_fsdp,
+                                      config=self.config.rollout,
+                                      tokenizer=self.tokenizer,
+                                      model_hf_config=self.actor_model_config)
+            elif self.config.rollout.name == 'vllm_multi_turn':
+                from verl.workers.rollout.vllm_rollout import vLLMMultiTurnRollout
+                rollout = vLLMMultiTurnRollout(actor_module=self.actor_module_fsdp,
+                                               config=self.config.rollout,
+                                               tokenizer=self.tokenizer,
+                                               model_hf_config=self.actor_model_config)
+            elif self.config.rollout.name == 'vllm_multi_turn_via_chat':
+                from verl.workers.rollout.vllm_rollout import vLLMMultiTurnViaChatRollout
+                rollout = vLLMMultiTurnViaChatRollout(actor_module=self.actor_module_fsdp,
+                                                      config=self.config.rollout,
+                                                      tokenizer=self.tokenizer,
+                                                      model_hf_config=self.actor_model_config)
             log_gpu_memory_usage('After building vllm rollout', logger=None)
             if torch.distributed.get_world_size() == 1:
                 self.config.rollout.load_format = 'dummy_hf'
@@ -316,27 +329,6 @@ class ActorRolloutRefWorker(Worker):
                                                                full_params='hf' in self.config.rollout.load_format,
                                                                device_mesh=rollout_device_mesh)
             log_gpu_memory_usage('After building sharding manager', logger=None)
-        elif self.config.rollout.name == 'vllm_multi_turn':
-            #assert self.config.rollout
-            from verl.workers.rollout.vllm_rollout import vLLMMultiTurnRollout
-            from verl.workers.sharding_manager import FSDPVLLMShardingManager
-            log_gpu_memory_usage('Before building vllm rollout', logger=None)
-            rollout = vLLMMultiTurnRollout(actor_module=self.actor_module_fsdp,
-                                           config=self.config.rollout,
-                                           tokenizer=self.tokenizer,
-                                           model_hf_config=self.actor_model_config)
-            log_gpu_memory_usage('After building vllm rollout', logger=None)
-            if torch.distributed.get_world_size() == 1:
-                print('Setting load_format to dummy_hf')
-                print("load_format:",self.config.rollout.load_format)
-                self.config.rollout.load_format = 'dummy_hf'
-            rollout_sharding_manager = FSDPVLLMShardingManager(module=self.actor_module_fsdp,
-                                                               inference_engine=rollout.inference_engine,
-                                                               model_config=self.actor_model_config,
-                                                               full_params='hf' in self.config.rollout.load_format,
-                                                               device_mesh=rollout_device_mesh)
-
-
         return rollout, rollout_sharding_manager
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
@@ -461,7 +453,7 @@ class ActorRolloutRefWorker(Worker):
         return output
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    def generate_sequences(self, prompts: DataProto):
+    def generate_sequences(self, prompts: DataProto, environment=None):
         prompts = prompts.to('cuda')
 
         assert self._is_rollout
@@ -484,7 +476,7 @@ class ActorRolloutRefWorker(Worker):
             log_gpu_memory_usage('After entering rollout sharding manager', logger=logger)
 
             prompts = self.rollout_sharding_manager.preprocess_data(prompts)
-            output = self.rollout.generate_sequences(prompts=prompts)
+            output = self.rollout.generate_sequences(prompts=prompts)  #, environment=environment) #We can't do this yet
 
             log_gpu_memory_usage('After rollout generation', logger=logger)
 

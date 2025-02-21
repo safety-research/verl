@@ -18,10 +18,13 @@ if __name__ == '__main__':
     regen = args.regen
     last_only = args.last_only
     ##
-    fols = glob.glob(os.path.join(base_dir, 'global_step_*'))
-    def get_global_step(fol):
-        return int(fol.split('global_step_')[1])
-    fols = sorted(fols, key=get_global_step)
+    if "/global_step" in base_dir:
+        fols = [base_dir]
+    else:
+        fols = glob.glob(os.path.join(base_dir, 'global_step_*'))
+        def get_global_step(fol):
+            return int(fol.split('global_step_')[1])
+        fols = sorted(fols, key=get_global_step)
     for ifol,fol in enumerate(tqdm.tqdm(fols)):
         if len(glob.glob(os.path.join(fol, 'actor/*.pt')))==0:
             continue

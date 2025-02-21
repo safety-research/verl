@@ -27,6 +27,19 @@ from verl.utils.fs import copy_local_path_from_hdfs
 from verl.utils.model import compute_position_id_with_mask
 import verl.utils.torch_functional as verl_F
 
+from verl.utils.py_functional import to_1d_np_array
+
+def recursive_convert(item):#removes all np arrays
+    if isinstance(item, np.ndarray):
+        # Convert numpy array to list, and recursively convert its elements
+        return recursive_convert(item.tolist())
+    elif isinstance(item, list):
+        return [recursive_convert(element) for element in item]
+    elif isinstance(item, dict):
+        return {key: recursive_convert(value) for key, value in item.items()}
+    else:
+        return item
+
 
 def collate_fn(data_list: list[dict]) -> dict:
     tensors = {}
@@ -47,7 +60,8 @@ def collate_fn(data_list: list[dict]) -> dict:
         tensors[key] = torch.stack(val, dim=0)
 
     for key, val in non_tensors.items():
-        non_tensors[key] = np.array(val, dtype=object)
+        non_tensors[key] = to_1d_np_array(val)
+        #non_tensors[key] = np.array(val, dtype=object)
 
     output = {}
     output.update(tensors)
@@ -114,8 +128,10 @@ class RLHFDataset(Dataset):
         self.dataframe = self.dataframe[self.dataframe.apply(lambda doc: len(
             tokenizer.apply_chat_template(doc[prompt_key], add_generation_prompt=True)) <= self.max_prompt_length,
                                                              axis=1)]
-
         print(f'filter dataset len: {len(self.dataframe)}')
+
+    #def undo_all_np_to_list(self):
+    #    recursive_all_np_to_list(
 
     def resume_dataset_state(self):
         self.serialize_dataset = False if hasattr(self, 'original_parquet_files') else True
@@ -134,6 +150,8 @@ class RLHFDataset(Dataset):
         Note that we also return the raw_input_ids so that it can be combined with other chat template
         """
         row_dict = self.dataframe.iloc[item].to_dict()
+        if "env_params" in row_dict:
+            row_dict["env_params"] = recursive_convert(row_dict["env_params"])#makes all internal np arrays into lists
 
         chat = row_dict.pop(self.prompt_key)
 
@@ -154,7 +172,7 @@ class RLHFDataset(Dataset):
 
         # encode prompts without chat template
         if self.return_raw_chat:
-            row_dict['raw_prompt'] = chat.tolist()
+            row_dict['raw_prompt'] = recursive_convert(chat)#makes all internal np arrays into lists
 
         # add index for each prompt
         index = row_dict.get("extra_info", {}).get("index", 0)

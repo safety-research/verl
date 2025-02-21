@@ -167,7 +167,10 @@ def get_eos_mask(response_id: torch.Tensor, eos_token: Union[int, List[int]] = 2
     eos_mask = torch.logical_not(eos_mask).to(dtype)
     return eos_mask
 
-def get_final_eos_mask(response_id: torch.Tensor, eos_token: Union[int, List[int]] = 2, dtype=torch.int64):#similar to get_eos_mask but only zero the mast after the *last* eos token
+
+def get_final_eos_mask(response_id: torch.Tensor,
+                       eos_token: Union[int, List[int]] = 2,
+                       dtype=torch.int64):  #similar to get_eos_mask but only zero the mast after the *last* eos token
     '''
     end of sentence token can be int or list: 1 or [1, 2]
     e.g. eos_token=1
@@ -179,7 +182,7 @@ def get_final_eos_mask(response_id: torch.Tensor, eos_token: Union[int, List[int
     eos_mask = torch.zeros_like(response_id, dtype=torch.bool)
     for token in eos_token:
         eos_mask |= response_id.eq(token)
-    mask = torch.cumsum(eos_mask.flip(dims=[0]), dim=0).bool().flip(dims=[0])
+    mask = torch.cumsum(eos_mask.flip(dims=[1]), dim=1).bool().flip(dims=[1])
     return mask.to(dtype)
 
 

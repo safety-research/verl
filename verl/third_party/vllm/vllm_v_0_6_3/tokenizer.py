@@ -38,3 +38,10 @@ class TokenizerGroup(TokenizerGroup):
     @property
     def eos_token_id(self):
         return self.tokenizer.eos_token_id
+
+    @property
+    def chat_template(self):
+        return self.tokenizer.chat_template
+
+    def apply_chat_template(self, *args, **kwargs):
+        return self.tokenizer.apply_chat_template(*args, **kwargs)

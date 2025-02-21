@@ -18,6 +18,7 @@ import torch
 from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.api import ShardingStrategy, ShardedStateDictConfig, StateDictType, FullStateDictConfig
 from torch.distributed.device_mesh import DeviceMesh
+import numpy as np
 
 from verl.third_party.vllm import LLM
 from verl.third_party.vllm import parallel_state as vllm_ps
@@ -115,6 +116,19 @@ class FSDPVLLMShardingManager(BaseShardingManager):
                                             size=vllm_ps.get_tensor_model_parallel_world_size(),
                                             group=vllm_ps.get_tensor_model_parallel_group(),
                                             dim=0)
+
+        if data.non_tensor_batch is not None and len(data.non_tensor_batch) > 0:
+            world_size = vllm_ps.get_tensor_model_parallel_world_size()
+            gathered_non_tensor = {}
+            # Loop over each key in the non-tensor batch.
+            for key, val in data.non_tensor_batch.items():
+                # Prepare a list to hold the gathered numpy arrays.
+                gathered = [None for _ in range(world_size)]
+                # Use all_gather_object to collect the numpy arrays from all ranks.
+                torch.distributed.all_gather_object(gathered, val, group=vllm_ps.get_tensor_model_parallel_group())
+                # Concatenate the gathered numpy arrays along the first dimension.
+                gathered_non_tensor[key] = np.concatenate(gathered, axis=0)
+            data.non_tensor_batch = gathered_non_tensor
 
         return data
 
