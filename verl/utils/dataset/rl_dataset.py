@@ -150,8 +150,6 @@ class RLHFDataset(Dataset):
         Note that we also return the raw_input_ids so that it can be combined with other chat template
         """
         row_dict = self.dataframe.iloc[item].to_dict()
-        if "env_params" in row_dict:
-            row_dict["env_params"] = recursive_convert(row_dict["env_params"])#makes all internal np arrays into lists
 
         chat = row_dict.pop(self.prompt_key)
 

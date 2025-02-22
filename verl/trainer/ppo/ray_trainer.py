@@ -585,7 +585,7 @@ class RayPPOTrainer(object):
 
             batch_keys = ['input_ids', 'attention_mask', 'position_ids']
             if self.config.actor_rollout_ref.rollout.name in ['vllm_multi_turn', 'vllm_multi_turn_via_chat']:
-                non_tensor_batch_keys = ['env_params', 'raw_prompt']
+                non_tensor_batch_keys = ['raw_prompt']
             else:
                 non_tensor_batch_keys = None
 
@@ -835,6 +835,7 @@ class RayPPOTrainer(object):
 
         for epoch in range(self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
+                #print("START BATCH.")
                 metrics = {}
                 timing_raw = {}
 
@@ -843,7 +844,7 @@ class RayPPOTrainer(object):
                 # pop those keys for generation
                 batch_keys = ['input_ids', 'attention_mask', 'position_ids']
                 if self.config.actor_rollout_ref.rollout.name in ['vllm_multi_turn', 'vllm_multi_turn_via_chat']:
-                    non_tensor_batch_keys = ['env_params', "raw_prompt"]
+                    non_tensor_batch_keys = ["raw_prompt"]
                 else:
                     non_tensor_batch_keys = None
                 gen_batch = batch.pop(batch_keys=batch_keys, non_tensor_batch_keys=non_tensor_batch_keys)
@@ -853,7 +854,7 @@ class RayPPOTrainer(object):
                     with _timer('gen', timing_raw):
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(
                             gen_batch)  #,environment=self.environment)#We can't do this yet
-
+                    #print("GEN DONE.")
                     batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))],
                                                              dtype=object)
                     # repeat to align with repeated responses in rollout
@@ -863,17 +864,20 @@ class RayPPOTrainer(object):
                     # balance the number of valid tokens on each dp rank.
                     # Note that this breaks the order of data inside the batch.
                     # Please take care when you implement group based adv computation such as GRPO and rloo
+                    #print("BALANCE BATCH")
                     self._balance_batch(batch, metrics=metrics)
 
                     # compute global_valid tokens
                     batch.meta_info['global_token_num'] = torch.sum(batch.batch['attention_mask'], dim=-1).tolist()
 
                     # recompute old_log_probs
+                    #print("OLD LOG PROBS")
                     with _timer('old_log_prob', timing_raw):
                         old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)  #this is no grad
                         batch = batch.union(old_log_prob)
 
                     if self.use_reference_policy:
+                        #print("DOING REF")
                         # compute reference log_prob
                         with _timer('ref', timing_raw):
                             ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
@@ -881,6 +885,7 @@ class RayPPOTrainer(object):
 
                     # compute values
                     if self.use_critic:
+                        #print("GETTING VALUES")
                         with _timer('values', timing_raw):
                             values = self.critic_wg.compute_values(batch)
                             batch = batch.union(values)
@@ -895,6 +900,7 @@ class RayPPOTrainer(object):
                             batch = batch.union(reward_tensor)
 
                         # we combine with rule-based rm
+                        #print("GETTING REWARD")
                         reward_tensor = self.reward_fn(batch)
                         batch.batch['token_level_scores'] = reward_tensor
 
@@ -908,6 +914,7 @@ class RayPPOTrainer(object):
                             batch.batch['token_level_rewards'] = batch.batch['token_level_scores']
 
                         # compute advantages, executed on the driver process
+                        #print("COMPUTING ADVANTAGES")
                         batch = compute_advantage(batch,
                                                   adv_estimator=self.config.algorithm.adv_estimator,
                                                   gamma=self.config.algorithm.gamma,
@@ -916,6 +923,7 @@ class RayPPOTrainer(object):
 
                     # update critic
                     if self.use_critic:
+                        #print("UPDATING CRITIC")
                         with _timer('update_critic', timing_raw):
                             critic_output = self.critic_wg.update_critic(batch)
                         critic_output_metrics = reduce_metrics(critic_output.meta_info['metrics'])

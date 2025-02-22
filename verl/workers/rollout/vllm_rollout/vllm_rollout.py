@@ -82,13 +82,6 @@ def pad_to_max_stack(tensor_list: List[torch.Tensor], pad_token_id: int) -> torc
         padded_tensor_list.append(torch.cat([t,torch.tensor([pad_token_id]*(max_len-t.size(0)),device=t.device,dtype=t.dtype)],dim=0))
     return torch.stack(padded_tensor_list,dim=0)
 
-"""
-def dict_element_tolist(env_params):
-    for key in env_params:
-        if isinstance(env_params[key], np.ndarray):
-            env_params[key] = env_params[key].tolist()
-    return env_params
-"""
 
 class vLLMRollout(BaseRollout):
 
@@ -390,6 +383,7 @@ class vLLMMultiTurnViaChatRollout(BaseRollout):
 
     @torch.no_grad()
     def generate_sequences(self, prompts: DataProto,**kwargs)->DataProto:#, environment, **kwargs) -> DataProto: #see verl/single_controller/base/decorator l.54, we can't send these classes as usual.
+        #print("START!")
         # rebuild vllm cache engine
         #assert environment is not None, "Environment is required for multi-turn rollout"
         if self.config.free_cache_engine:
@@ -398,10 +392,6 @@ class vLLMMultiTurnViaChatRollout(BaseRollout):
 
         idx=prompts.batch['input_ids']#just for device, size
         batch_size = idx.size(0)
-
-        #environment
-        env_params = prompts.non_tensor_batch['env_params'].tolist()
-        assert len(env_params)==batch_size, "This bug should be fixed, but didn't try different multi processing settings"
 
         attention_mask=prompts.batch['attention_mask']
         idx_generation_mask=torch.zeros_like(idx,dtype=attention_mask.dtype,device=attention_mask.device)
@@ -425,7 +415,6 @@ class vLLMMultiTurnViaChatRollout(BaseRollout):
         #if rank==0:
         #    print("RAW_PROMPT:",raw_prompt)
         #    print("RAW_PROMPT_LEN:",len(raw_prompt))
-        #    print("ENV_PARAMS_LEN:",len(env_params))
         #    print("BATCH_SIZE:",batch_size)
         #    print("IDX_TYPE:",type(idx))
         #    print("IDX",idx[:,0])
@@ -435,7 +424,6 @@ class vLLMMultiTurnViaChatRollout(BaseRollout):
 
         todo=list(range(batch_size*n))#manually batch n
         messagess=[]
-        env_paramss=[]
         prefix_lengths=[]
         for i_batch in range(batch_size):
             raw_prompt_i_batch=raw_prompt[i_batch]
@@ -444,7 +432,6 @@ class vLLMMultiTurnViaChatRollout(BaseRollout):
             #    print("PROMPT",raw_prompt_i_batch,"N_TOKENS:",n_tokens)
             for _ in range(n):
                 messagess.append(raw_prompt_i_batch.copy())
-                env_paramss.append(env_params[i_batch].copy())
                 prefix_lengths.append(n_tokens_prefix)
 
         while True:
@@ -453,6 +440,7 @@ class vLLMMultiTurnViaChatRollout(BaseRollout):
             for i_batch_sample in todo:
                 messages_=[{"role":msg["role"],"content":msg["content"]} for msg in messagess[i_batch_sample]]
                 messagess_todo.append(messages_)
+            #print("START GENERATION")
             with self.update_sampling_params(**kwargs):
                 assert self.sampling_params.n==1,"n should be 1 for multi-turn"
                 output = self.inference_engine.chat(
@@ -481,19 +469,17 @@ class vLLMMultiTurnViaChatRollout(BaseRollout):
                 """
             #interact with environment
             messagess_todo=[]
-            env_paramss_todo=[]
             for i_batch_sample in todo:
                 messagess_todo.append(messagess[i_batch_sample])
-                env_paramss_todo.append(env_paramss[i_batch_sample])
 
             #We can't do thus yet:
-            #env_response_batched=environment.get_response_batched(messages_batched=messagess_todo,env_params_batched=env_paramss_todo)
+            #env_response_batched=environment.get_response_batched(messages_batched=messagess_todo)
             #So we hardcode it for now:
             payload = {
-                "messages_batched": messagess_todo,
-                "env_params_batched": env_paramss_todo
+                "messages_batched": messagess_todo
             }
             url = self.config.environment.url+"/get_env_response_batched"
+            #print("GET ENV RESPONSE")
             env_response_batched = requests.post(url, json=payload).json()
 
 
@@ -583,13 +569,12 @@ class vLLMMultiTurnViaChatRollout(BaseRollout):
             },
             batch_size=batch_size)
         non_tensor_batch = {
-            'messages': to_1d_np_array(messagess),
-            'env_params': to_1d_np_array(env_paramss)
+            'messages': to_1d_np_array(messagess)
         }
 
         # free vllm cache engine
         if self.config.free_cache_engine:
             self.inference_engine.free_cache_engine()
-
+        #print("DONE!")
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
 

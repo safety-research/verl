@@ -454,6 +454,7 @@ class ActorRolloutRefWorker(Worker):
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def generate_sequences(self, prompts: DataProto, environment=None):
+        #print("FSDP Actor Rollout Ref Worker: generate_sequences START")
         prompts = prompts.to('cuda')
 
         assert self._is_rollout
@@ -490,6 +491,7 @@ class ActorRolloutRefWorker(Worker):
         # clear kv cache
         torch.cuda.empty_cache()
         log_gpu_memory_usage('After recompute log prob', logger=logger)
+        #print("FSDP Actor Rollout Ref Worker: generate_sequences DONE")
         return output
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)

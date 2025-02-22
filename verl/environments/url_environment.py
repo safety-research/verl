@@ -11,15 +11,14 @@ class URLEnvironment():
         self.tokenizer = tokenizer
         self.url = self.config.actor_rollout_ref.rollout.environment.url
 
-    def get_response_batched(self, messages_batched, env_params_batched):
-        payload = {"messages_batched": messages_batched, "env_params_batched": env_params_batched}
+    def get_response_batched(self, messages_batched):
+        payload = {"messages_batched": messages_batched}
         url = self.url + "/get_env_response_batched"
         env_response_batched = requests.post(url, json=payload).json()
         return env_response_batched
 
     def get_reward_batched(self, data: DataProto):  #batched
         messages_batched = []
-        env_params_batched = []
         reward_locs = []
         for i in range(len(data)):
             data_item = data[i]  # DataProtoItem
@@ -27,8 +26,6 @@ class URLEnvironment():
             if isinstance(messages, np.ndarray):
                 messages = messages.tolist()
             messages_batched.append(messages)
-            env_params = data_item.non_tensor_batch['env_params']
-            env_params_batched.append(env_params)
 
             attention_mask = data_item.batch['attention_mask']
             prompt_ids = data_item.batch['prompts']
@@ -37,7 +34,7 @@ class URLEnvironment():
             reward_locs.append(valid_response_length - 1)
 
         url = self.url + "/get_reward_batched"
-        payload = {"messages_batched": messages_batched, "env_params_batched": env_params_batched}
+        payload = {"messages_batched": messages_batched}
         reward_batched = requests.post(url, json=payload).json()
 
         reward_tensor = torch.zeros_like(data.batch['responses'], dtype=torch.float32)
