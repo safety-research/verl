@@ -833,6 +833,7 @@ class RayPPOTrainer(object):
         # we start from step 1
         self.global_steps += 1
 
+        saved_steps={}
         for epoch in range(self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
                 #print("START BATCH.")
@@ -948,6 +949,7 @@ class RayPPOTrainer(object):
                             self.global_steps % self.config.trainer.save_freq == 0:
                         with _timer('save_checkpoint', timing_raw):
                             self._save_checkpoint()
+                        saved_steps[self.global_steps] = True
 
                 # collect metrics
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
@@ -958,7 +960,13 @@ class RayPPOTrainer(object):
 
                 self.global_steps += 1
 
-                if self.global_steps >= self.total_training_steps:
+                if self.global_steps > self.total_training_steps:#its > since we started from 1, e.g. global steps need to be 3 when entering this to apply 2 training steps.
+                    # save last checkpoint unless already saved, we need to undo the last increment for the right name.
+                    self.global_steps -= 1
+                    if self.global_steps not in saved_steps:
+                        with _timer('save_checkpoint', timing_raw):
+                            self._save_checkpoint()
+                    self.global_steps += 1
 
                     # perform validation after training
                     if self.val_reward_fn is not None:

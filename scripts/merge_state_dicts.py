@@ -45,6 +45,8 @@ if __name__ == '__main__':
             ranks.append(rank)
         assert len(set(world_sizes))==1
         world_size = world_sizes[0]
+        #print("World size:",world_size)
+        #print("n_files:",len(weight_files))
         assert set(ranks)==set(range(world_size))
         #sort by rank
         argsort = np.argsort(ranks)
