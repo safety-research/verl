@@ -556,7 +556,6 @@ class vLLMMultiTurnViaChatRollout(BaseRollout):
         #    print("GENMASK.0",generation_mask[0].tolist())
         #    assert False
 
-
         # all the tp ranks should contain the same data here. data in all ranks are valid
         batch = TensorDict(
             {
