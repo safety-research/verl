@@ -9,7 +9,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('state_dict_path', type=str, 
                         help="Glob pattern for state dict files (e.g., './data/*/model/state_dict_*.pt')")
-    parser.add_argument('--model_name', type=str, default="Qwen/Qwen2.5-3B-Instruct")
+    parser.add_argument('--model_name', type=str, default="Qwen/Qwen2.5-7B-Instruct")
     parser.add_argument('--save_path', type=str, default=None,
                         help="If given, either a single directory or a full path. For multiple files, a directory is expected.")
     parser.add_argument('--push_name', type=str, default=None,
