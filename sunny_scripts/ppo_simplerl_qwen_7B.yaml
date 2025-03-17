@@ -1,10 +1,10 @@
 data:
   tokenizer: null
-  train_files: /n/home05/sqin/wall/verl/data/math/train.parquet
+  train_files: /n/home05/sqin/wall/verl/data/simplerl_math/train.parquet
   val_files: /n/home05/sqin/wall/verl/data/math/test.parquet
   prompt_key: prompt
   max_prompt_length: 1024
-  max_response_length: 2048
+  max_response_length: 3000
   train_batch_size: 1024
   val_batch_size: 1312
   return_raw_chat: False
@@ -42,7 +42,7 @@ actor_rollout_ref:
       param_offload: True
   rollout:
     name: vllm
-    temperature: 1.0
+    temperature: 0.6
     top_k: -1
     top_p: 1
     prompt_length: 1024
@@ -60,15 +60,28 @@ actor_rollout_ref:
     do_sample: True
     n: 8
 
+critic:
+  optim:
+    lr: 1e-5
+  model:
+    use_remove_padding: True
+    path: /n/netscratch/dam_lab/Lab/sqin/models/qwen/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28
+    enable_gradient_checkpointing: True 
+    ppo_micro_batch_size_per_gpu: 32 
+    param_offload: False
+    fsdp_config:
+      grad_offload: False 
+      optimizer_offload: False
+
 algorithm:
   kl_ctrl:
-    kl_coef: 0.001
-  adv_estimator: grpo
+    kl_coef: 0.01
+  adv_estimator: gae
 
 trainer:
-  total_epochs: 60
+  total_epochs: 40
   project_name: reason-wall
-  experiment_name: Qwen2.5-7B-Instruct_verl_grpo_MATH_train
+  experiment_name: Qwen2.5-7B-Instruct_verl_ppo_SIMPLERL_train
   logger: [ 'console', 'wandb' ]
   val_before_train: False
   nnodes: 2

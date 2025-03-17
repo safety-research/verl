@@ -2,13 +2,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 device = "cuda" # the device to load the model onto
 
 model = AutoModelForCausalLM.from_pretrained(
-    "Qwen/Qwen2.5-7B-Instruct",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
     torch_dtype="auto",
     device_map="auto",
     cache_dir="/n/netscratch/dam_lab/Lab/sqin/models/qwen/"
 )
 tokenizer = AutoTokenizer.from_pretrained(
-    "Qwen/Qwen2.5-7B-Instruct",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
     cache_dir="/n/netscratch/dam_lab/Lab/sqin/models/qwen/")
 
 prompt = "Give me a short introduction to large language model."

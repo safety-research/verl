@@ -9,8 +9,7 @@
 #SBATCH -o slurm_out/slurm-%j.out # Standard out goes to this file
 #SBATCH -e slurm_out/slurm-%j.out # Standard err goes to this file
 #SBATCH --account=kempner_barak_lab
-#SBATCH --job-name=grpo_3B_MATH
-#SBATCH --exclude=holygpu8a17602,holygpu8a17503,holygpu8a13604,holygpu8a13202,holygpu8a15604
+#SBATCH --job-name=grpo_distill1.5B_MATH
 
 
 module purge
@@ -23,4 +22,4 @@ cd /n/home05/sqin/wall/verl
 pwd
 
 
-python3 -m verl.trainer.main_ppo sunny_scripts/grpo_math.yaml
+python3 -m verl.trainer.main_ppo sunny_scripts/grpo_math_distilled_1.5B.yaml

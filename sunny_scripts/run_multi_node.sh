@@ -8,8 +8,11 @@
 #SBATCH --gres=gpu:4             # number of gpus per node
 #SBATCH --time=72:00:00          # total run time limit (HH:MM:SS)
 #SBATCH --account=kempner_barak_lab
-#SBATCH --exclude=holygpu8a13303
+#SBATCH -o slurm_out/slurm-%j.out # Standard out goes to this file
+#SBATCH -e slurm_out/slurm-%j.out # Standard err goes to this file
 #SBATCH --job-name=grpo_7B    # create a short name for your job
+#SBATCH --exclude=holygpu8a13303
+
 
 cd /n/home05/sqin/wall/verl
 pwd
@@ -55,4 +58,4 @@ export RAY_ADDRESS="$RAY_HEAD_ADDR"
 
 
  
-python3 -m verl.trainer.main_ppo sunny_scripts/grpo_math_qwen_7B.yaml
+python3 -m verl.trainer.main_ppo sunny_scripts/grpo_simplerl_qwen_7B.yaml

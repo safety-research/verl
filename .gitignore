@@ -120,3 +120,4 @@ tests/e2e/toy_examples/deepspeed/synchronous/output.txt
 .config/
 data/
 sunny_scripts/slurm_out/*
+analysis/

@@ -25,7 +25,7 @@ import requests
 def _default_compute_score(config, data_source, solution_str, ground_truth):
     if data_source == 'openai/gsm8k':
         return gsm8k.compute_score(solution_str, ground_truth)
-    elif data_source in ['lighteval/MATH', 'DigitalLearningGmbH/MATH-lighteval']:
+    elif data_source in ['lighteval/MATH', 'DigitalLearningGmbH/MATH-lighteval', 'sunnytqin/simplerl-math']:
         return math.compute_score(solution_str, ground_truth)
     elif data_source == 'cfpark00/MATH':
         return math.compute_score(solution_str, ground_truth)
