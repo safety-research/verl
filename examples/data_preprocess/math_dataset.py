@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Preprocess the GSM8k dataset to parquet format
+Preprocess the MATH dataset to parquet format
 """
 
 import os
@@ -81,6 +81,17 @@ if __name__ == '__main__':
 
     local_dir = args.local_dir
     hdfs_dir = args.hdfs_dir
+
+    # get unique types 
+    unique_types = train_dataset.unique('type')
+    for type in unique_types:
+        # create per-subject subset
+        train_subset = train_dataset.filter(lambda x: x['type'] == type)
+        test_subset = test_dataset.filter(lambda x: x['type'] == type)
+        print(f"Type: {type}, train: {len(train_subset)}, test: {len(test_subset)}")
+        # save subset to parquet
+        train_subset.to_parquet(os.path.join(local_dir, f'train_{type.replace(" ", "_")}.parquet'))
+        test_subset.to_parquet(os.path.join(local_dir, f'test_{type.replace(" ", "_")}.parquet'))
 
     train_dataset.to_parquet(os.path.join(local_dir, 'train.parquet'))
     test_dataset.to_parquet(os.path.join(local_dir, 'test.parquet'))

@@ -11,6 +11,8 @@ if __name__ == '__main__':
     parser.add_argument('--dest_dir', type=str, default=None)
     parser.add_argument('--regen', action='store_true')
     parser.add_argument('--last_only', action='store_true')
+    parser.add_argument('--specify_step', type=int, default=None)
+
     args = parser.parse_args()
     base_dir = args.base_dir
     assert os.path.exists(base_dir)
@@ -25,6 +27,8 @@ if __name__ == '__main__':
         def get_global_step(fol):
             return int(fol.split('global_step_')[1])
         fols = sorted(fols, key=get_global_step)
+        if args.specify_step is not None:
+            fols = [f for f in fols if get_global_step(f)==args.specify_step]
     for ifol,fol in enumerate(tqdm.tqdm(fols)):
         if len(glob.glob(os.path.join(fol, 'actor/*.pt')))==0:
             continue
@@ -64,4 +68,5 @@ if __name__ == '__main__':
         else:
             save_path = os.path.join(dest_dir, f'state_dict_{ifol}.pt')
         torch.save(state_dict, save_path)
+        print(f'saved {save_path}')
     
