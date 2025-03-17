@@ -155,6 +155,8 @@ class vLLMRollout(BaseRollout):
         #(f"kwargs: {kwargs}")
         self.sampling_params = SamplingParams(**kwargs)
 
+        self.eval_temperature = self.config.get('eval_temperature', 0.0)
+
         self.pad_token_id = tokenizer.pad_token_id
 
     @contextmanager
@@ -201,7 +203,7 @@ class vLLMRollout(BaseRollout):
                 'top_p': 1.0,
                 'top_k': -1,
                 'min_p': 0.0,
-                'temperature': 0,
+                'temperature': self.eval_temperature,
                 'n': 1  # if greedy, only 1 response
             }
 
