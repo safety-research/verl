@@ -209,7 +209,7 @@ class FSDPSFTTrainer(object):
         with init_context():
             self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(local_model_path,
                                                                                config=config,
-                                                                               torch_dtype=torch.float32,
+                                                                               torch_dtype=torch.bfloat16,
                                                                                attn_implementation='flash_attention_2',
                                                                                trust_remote_code=trust_remote_code)
 
@@ -378,8 +378,12 @@ class FSDPSFTTrainer(object):
 
                 loss = torch.sum(loss) / valid_token_this_rank * dp_size
 
+                torch.cuda.empty_cache()
+
                 if do_backward:
                     loss.backward()
+
+                torch.cuda.empty_cache()
                 return loss
 
     def training_step(self, batch: TensorDict):
@@ -387,7 +391,8 @@ class FSDPSFTTrainer(object):
 
         log_gpu_memory_usage('Before optimizer zero_grad', logger=logger)
 
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
+        torch.cuda.empty_cache()
 
         log_gpu_memory_usage('After optimizer zero_grad', logger=logger)
 
@@ -397,12 +402,14 @@ class FSDPSFTTrainer(object):
         for micro_batch in micro_batches:
             loss = self._compute_loss_and_backward(batch=micro_batch) / n_micro_batches
             step_loss += loss.item()
+            torch.cuda.empty_cache()
 
         self.fsdp_model.clip_grad_norm_(max_norm=self.config.optim.clip_grad)
 
         log_gpu_memory_usage('Before optimizer step', logger=logger)
 
         self.optimizer.step()
+        torch.cuda.empty_cache()
 
         log_gpu_memory_usage('After optimizer step', logger=logger)
 
