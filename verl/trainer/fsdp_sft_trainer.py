@@ -220,6 +220,7 @@ class FSDPSFTTrainer:
                     "lora_alpha": self.config.model.lora_alpha,
                     "target_modules": convert_to_regular_types(self.config.model.target_modules),
                     "bias": "none",
+                    "use_rslora": True
                 }
                 self.model = get_peft_model(self.model, LoraConfig(**lora_config))
 
