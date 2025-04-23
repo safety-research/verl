@@ -53,7 +53,7 @@ from verl.utils.ulysses import ulysses_pad_and_slice_inputs, gather_outpus_and_u
 from verl import DataProto
 
 logger = logging.getLogger(__file__)
-logger.setLevel(os.getenv('VERL_SFT_LOGGING_LEVEL', 'WARN'))
+logger.setLevel('INFO')
 
 
 def extract_step(path):

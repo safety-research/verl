@@ -30,6 +30,7 @@ torchrun    --nproc_per_node=$NUM_TRAINERS \
     model.enable_gradient_checkpointing=True \
     model.fsdp_config.cpu_offload=True \
     model.fsdp_config.offload_params=True \
+    model.fsdp_config.wrap_policy.min_num_params=20000000 \
     model.lora_rank=256 \
     model.lora_alpha=256 \
     model.target_modules=[q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj] \

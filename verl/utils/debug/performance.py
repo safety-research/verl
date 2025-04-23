@@ -24,7 +24,4 @@ def log_gpu_memory_usage(head: str, logger: logging.Logger = None, level=logging
 
         message = f'{head}, memory allocated (GB): {memory_allocated}, memory reserved (GB): {memory_reserved}'
 
-        if logger is None:
-            print(message)
-        else:
-            logger.log(msg=message, level=level)
+        print(message)
