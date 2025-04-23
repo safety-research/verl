@@ -20,6 +20,8 @@ class URLEnvironment():
     def get_reward_batched(self, data: DataProto):  #batched
         messages_batched = []
         reward_locs = []
+        ground_truth = []
+
         for i in range(len(data)):
             data_item = data[i]  # DataProtoItem
             messages = data_item.non_tensor_batch['messages']
@@ -29,12 +31,15 @@ class URLEnvironment():
 
             attention_mask = data_item.batch['attention_mask']
             prompt_ids = data_item.batch['prompts']
+            ground_truth = data_item.non_tensor_batch['reward_model']['ground_truth']
             prompt_length = prompt_ids.shape[-1]
             valid_response_length = attention_mask[prompt_length:].sum()
             reward_locs.append(valid_response_length - 1)
+            ground_truth.append(ground_truth)
 
+        # TODO(sguo35): extract the ground truth from the batch
         url = self.url + "/get_reward_batched"
-        payload = {"messages_batched": messages_batched}
+        payload = {"messages_batched": messages_batched, "ground_truth": ground_truth}
         reward_batched = requests.post(url, json=payload).json()
 
         reward_tensor = torch.zeros_like(data.batch['responses'], dtype=torch.float32)

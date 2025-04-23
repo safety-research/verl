@@ -19,11 +19,13 @@ torchrun --standalone --nnodes=1 --nproc_per_node=$nproc_per_node \
     data.response_key=extra_info \
     +data.prompt_dict_keys=['question'] \
     +data.response_dict_keys=['answer'] \
-    data.micro_batch_size_per_gpu=4 \
-    model.partial_pretrain=deepseek-ai/deepseek-coder-6.7b-instruct \
+    data.train_batch_size=252 \
+    data.micro_batch_size_per_gpu=1 \
+    model.partial_pretrain=/workspace/jeffg/llama-4-scout-instruct \
+    model.enable_gradient_checkpointing=True \
     trainer.default_local_dir=$save_path \
     trainer.project_name=gsm8k-sft \
-    trainer.experiment_name=gsm8k-sft-deepseek-coder-6.7b-instruct \
+    trainer.experiment_name=gsm8k-sft-llama-4-scout-instruct \
     trainer.total_epochs=4 \
     trainer.logger=['console'] \
     trainer.default_hdfs_dir=null $@
