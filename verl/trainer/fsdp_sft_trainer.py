@@ -188,7 +188,7 @@ class FSDPSFTTrainer:
             self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(
                 local_model_path,
                 config=config,
-                torch_dtype=torch.float32,
+                torch_dtype=torch.bfloat16,
                 attn_implementation="flash_attention_2",
                 trust_remote_code=trust_remote_code,
             )
@@ -213,6 +213,7 @@ class FSDPSFTTrainer:
                     "lora_alpha": self.config.model.lora_alpha,
                     "target_modules": convert_to_regular_types(self.config.model.target_modules),
                     "bias": "none",
+                    "use_rslora": True
                 }
                 self.model = get_peft_model(self.model, LoraConfig(**lora_config))
 
