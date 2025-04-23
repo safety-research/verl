@@ -52,8 +52,6 @@ from verl.workers.sharding_manager import FSDPUlyssesShardingManager
 from verl.utils.ulysses import ulysses_pad_and_slice_inputs, gather_outpus_and_unpad
 from verl import DataProto
 
-from torchao.prototype.low_bit_optim import AdamWFp8
-
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv('VERL_SFT_LOGGING_LEVEL', 'WARN'))
 
@@ -228,7 +226,8 @@ class FSDPSFTTrainer(object):
                     'r': self.config.model.lora_rank,
                     'lora_alpha': self.config.model.lora_alpha,
                     'target_modules': convert_to_regular_types(self.config.model.target_modules),
-                    'bias': "none"
+                    'bias': "none",
+                    'use_rslora': True
                 }
                 self.model = get_peft_model(self.model, LoraConfig(**lora_config))
 
@@ -265,7 +264,7 @@ class FSDPSFTTrainer(object):
 
         log_gpu_memory_usage('After FSDP wrapping', logger=logger)
 
-        self.optimizer = AdamWFp8(self.fsdp_model.parameters(),
+        self.optimizer = optim.AdamW(self.fsdp_model.parameters(),
                                      lr=self.config.optim.lr,
                                      betas=self.config.optim.betas,
                                      weight_decay=self.config.optim.weight_decay)
