@@ -12,11 +12,11 @@ save_path=$3
 # Shift the arguments so $@ refers to the rest
 shift 3
 
-torchrun    --nproc_per_node=$NUM_TRAINERS \
-  --nnodes=$NUM_NODES \
-  --node_rank=$NODE_RANK \
-  --master_addr=$MASTER_ADDR \
-  --master_port=$MASTER_PORT \
+torchrun    --nproc_per_node=8 \
+  --nnodes=1 \
+  --node_rank=0 \
+  --master_addr=localhost \
+  --master_port=29400 \
      -m verl.trainer.fsdp_sft_trainer \
     data.train_files=$HOME/data/gsm8k/train.parquet \
     data.val_files=$HOME/data/gsm8k/test.parquet \
@@ -25,15 +25,12 @@ torchrun    --nproc_per_node=$NUM_TRAINERS \
     +data.prompt_dict_keys=['question'] \
     +data.response_dict_keys=['answer'] \
     data.train_batch_size=256 \
-    data.micro_batch_size_per_gpu=1 \
+    data.micro_batch_size_per_gpu=8 \
     model.partial_pretrain=/home/jeffg/llama-4-scout-instruct \
     model.enable_gradient_checkpointing=True \
-    model.fsdp_config.cpu_offload=True \
+    model.fsdp_config.wrap_policy.min_num_params=2000000000 \
     model.fsdp_config.offload_params=True \
-    model.fsdp_config.wrap_policy.min_num_params=20000000 \
-    model.lora_rank=256 \
-    model.lora_alpha=256 \
-    model.target_modules=[q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj] \
+    model.fsdp_config.cpu_offload=True \
     trainer.default_local_dir=$save_path \
     trainer.project_name=gsm8k-sft \
     trainer.experiment_name=gsm8k-sft-llama-4-scout-instruct \
