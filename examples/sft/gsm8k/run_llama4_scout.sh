@@ -6,12 +6,17 @@ if [ "$#" -lt 2 ]; then
 fi
 
 nproc_per_node=$1
-save_path=$2
+node_rank=$2
+save_path=$3
 
 # Shift the arguments so $@ refers to the rest
-shift 2
+shift 3
 
-torchrun --standalone --nnodes=1 --nproc_per_node=$nproc_per_node \
+torchrun   --nproc_per_node=$nproc_per_node \
+    --nnodes=2 \
+    --node_rank=$node_rank \
+    --master_addr=10.65.0.2 \
+    --master_port=29400 \
      -m verl.trainer.fsdp_sft_trainer \
     data.train_files=$HOME/data/gsm8k/train.parquet \
     data.val_files=$HOME/data/gsm8k/test.parquet \
@@ -19,7 +24,7 @@ torchrun --standalone --nnodes=1 --nproc_per_node=$nproc_per_node \
     data.response_key=extra_info \
     +data.prompt_dict_keys=['question'] \
     +data.response_dict_keys=['answer'] \
-    data.train_batch_size=252 \
+    data.train_batch_size=255 \
     data.micro_batch_size_per_gpu=1 \
     model.partial_pretrain=/workspace/jeffg/llama-4-scout-instruct \
     model.enable_gradient_checkpointing=True \
