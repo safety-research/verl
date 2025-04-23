@@ -13,11 +13,11 @@ save_path=$3
 shift 3
 
 
-torchrun   --nproc_per_node=$nproc_per_node \
-    --nnodes=2 \
-    --node_rank=$node_rank \
-    --master_addr=10.65.0.2 \
-    --master_port=29400 \
+torchrun    --nproc_per_node=$NUM_TRAINERS \
+  --nnodes=$NUM_NODES \
+  --node_rank=$NODE_RANK \
+  --master_addr=$MASTER_ADDR \
+  --master_port=$MASTER_PORT \
      -m verl.trainer.fsdp_sft_trainer \
     data.train_files=$HOME/data/gsm8k/train.parquet \
     data.val_files=$HOME/data/gsm8k/test.parquet \
