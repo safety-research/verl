@@ -39,7 +39,7 @@ from torch.distributed.fsdp import CPUOffload, MixedPrecision, ShardingStrategy
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 from tqdm import tqdm
-from transformers import AutoConfig, AutoModelForCausalLM, PreTrainedModel
+from transformers import AutoConfig, AutoModel, PreTrainedModel
 
 import verl.utils.hdfs_io as hdfs_io
 from verl.utils.dataset import SFTDataset
@@ -185,11 +185,11 @@ class FSDPSFTTrainer:
         init_context = get_init_weight_context_manager(use_meta_tensor=not config.tie_word_embeddings, mesh=self.device_mesh)
 
         with init_context():
-            self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(
+            self.model: PreTrainedModel = AutoModel.from_pretrained(
                 local_model_path,
                 config=config,
                 torch_dtype=torch.bfloat16,
-                attn_implementation="flash_attention_2",
+                attn_implementation="flex_attention",
                 trust_remote_code=trust_remote_code,
             )
 
@@ -247,8 +247,10 @@ class FSDPSFTTrainer:
             sync_module_states=True,
             device_id=torch.cuda.current_device(),
             cpu_offload=cpu_offload,
-            use_orig_params=False,
+            use_orig_params=True,
         )
+        if self.config.model.fsdp_config.get("torch_compile", False):
+            self.fsdp_model = torch.compile(self.fsdp_model)
 
         log_gpu_memory_usage("After FSDP wrapping", logger=logger)
 
@@ -299,7 +301,7 @@ class FSDPSFTTrainer:
                 shift_logits = logits[..., :-1, :].contiguous()
                 shift_labels = labels.contiguous()
                 # Flatten the tokens
-                shift_logits = shift_logits.view(-1, self.model.config.vocab_size)
+                shift_logits = shift_logits.view(-1, getattr(self.model.config, "vocab_size", self.model.config.text_config.vocab_size))
                 shift_labels = shift_labels.view(-1)
                 # Enable model parallelism
                 shift_labels = shift_labels.to(shift_logits.device)
@@ -497,8 +499,8 @@ class FSDPSFTTrainer:
                 tracking.log(data=metric, step=global_step)
             torch.distributed.barrier()
 
-            # save checkpoint
-            self.save_checkpoint(step=global_step)
+        # save checkpoint
+        self.save_checkpoint(step=global_step)
 
 
 @hydra.main(config_path="config", config_name="sft_trainer", version_base=None)
