@@ -256,10 +256,8 @@ class FSDPSFTTrainer:
             sync_module_states=True,
             device_id=torch.cuda.current_device(),
             cpu_offload=cpu_offload,
-            use_orig_params=True,
+            use_orig_params=False,
         )
-        if self.config.model.fsdp_config.get("torch_compile", False):
-            self.fsdp_model = torch.compile(self.fsdp_model)
 
         log_gpu_memory_usage("After FSDP wrapping", logger=logger)
 

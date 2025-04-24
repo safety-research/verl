@@ -31,7 +31,6 @@ torchrun    --nproc_per_node=8 \
     model.partial_pretrain=/home/jeffg/llama-4-scout-instruct \
     model.enable_gradient_checkpointing=True \
     model.fsdp_config.wrap_policy.min_num_params=20000000 \
-    +model.fsdp_config.torch_compile=True \
     model.use_liger=True \
     model.lora_rank=256 \
     model.lora_alpha=256 \
