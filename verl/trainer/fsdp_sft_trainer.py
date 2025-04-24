@@ -38,7 +38,7 @@ from torch.distributed.fsdp import CPUOffload, MixedPrecision, ShardingStrategy
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 from tqdm import tqdm
-from transformers import AutoConfig, AutoModel, PreTrainedModel
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, PreTrainedModel
 
 import verl.utils.hdfs_io as hdfs_io
 from verl.utils.dataset import SFTDataset
@@ -192,13 +192,22 @@ class FSDPSFTTrainer:
         init_context = get_init_weight_context_manager(use_meta_tensor=not config.tie_word_embeddings, mesh=self.device_mesh)
 
         with init_context():
-            self.model: PreTrainedModel = AutoModel.from_pretrained(
-                local_model_path,
-                config=config,
-                torch_dtype=torch_dtype,
-                attn_implementation="flash_attention_2",
-                trust_remote_code=trust_remote_code,
-            )
+            if "Qwen" in self.config.model.partial_pretrain:
+                self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(
+                    local_model_path,
+                    config=config,
+                    torch_dtype=torch.bfloat16,
+                    attn_implementation="flash_attention_2",
+                    trust_remote_code=trust_remote_code,
+                )
+            else:
+                self.model: PreTrainedModel = AutoModel.from_pretrained(
+                    local_model_path,
+                    config=config,
+                    torch_dtype=torch.bfloat16,
+                    attn_implementation="flex_attention",
+                    trust_remote_code=trust_remote_code,
+                )
 
             if self.use_remove_padding or self.config.ulysses_sequence_parallel_size > 1:
                 from verl.models.transformers.monkey_patch import apply_monkey_patch
@@ -326,7 +335,9 @@ class FSDPSFTTrainer:
                 shift_logits = logits[..., :-1, :].contiguous()
                 shift_labels = labels.contiguous()
                 # Flatten the tokens
-                shift_logits = shift_logits.view(-1, getattr(self.model.config, "vocab_size", self.model.config.text_config.vocab_size))
+                vocab_size = getattr(self.model.config, "text_config", self.model.config).vocab_size
+
+                shift_logits = shift_logits.view(-1, vocab_size)
                 shift_labels = shift_labels.view(-1)
                 # Enable model parallelism
                 shift_labels = shift_labels.to(shift_logits.device)
