@@ -1,0 +1,36 @@
+#  sky launch -c jeff-cotdecomp-8xh100 jeff-experiments/infra/base_job.yaml  --down
+resources:
+  cloud: runpod
+  accelerators: H100-SXM:2
+  region: US
+  disk_size: 2000
+  image_id: runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+
+file_mounts:
+  ~/.ssh/id_rsa: ~/.ssh/id_rsa
+  ~/.ssh/config: ~/.ssh/config
+  ~/.netrc: ~/.netrc
+  ~/sky_workdir/verl: ~/verl
+
+# working dir is ~/sky_workdir/
+
+envs:
+  EXPERIMENT_NAME: mmlu-sft-qwen25-1.5b-instruct
+  PROJECT_NAME: mmlu-sft
+
+# Setup commands (optional).
+# Typical use: pip install -r requirements.txt
+# Invoked under the workdir (i.e., can use its files).
+setup: |
+  echo "Running setup."
+  chown -R root ~/.ssh
+  chmod -R 700 ~/.ssh
+  rsync -e 'ssh -o "StrictHostKeyChecking no"' -av cluster1:/home/jeffg/mmlu_full_gpt41 ~/sky_workdir/
+  ~/sky_workdir/verl/jeff-experiments/infra/base_setup.sh
+
+# Run commands.
+# Typical use: make use of resources, such as running training.
+# Invoked under the workdir (i.e., can use its files).
+run: |
+  conda deactivate && source ~/sky_workdir/anthropic/bin/activate && ~/sky_workdir/verl/jeff-experiments/run_qwen25_small.sh ~/qwen_test
+  rsync -a --progress ~/qwen_test cluster1:/workspace/jeffg/
