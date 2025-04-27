@@ -2,7 +2,7 @@ pip install uv
 uv venv anthropic
 source anthropic/bin/activate
 apt-get update && apt-get install vim screen rsync nvtop htop iftop -y
-uv pip install tensordict==0.7.2 peft
+uv pip install tensordict==0.7.2 peft duckdb
 uv pip install torch==2.4 setuptools torchao
 uv pip install nvidia-cuda-nvcc-cu12 nvidia-cudnn-cu12
 
@@ -37,3 +37,5 @@ uv pip install transformers --upgrade
 uv pip install vllm==0.8.4
 uv pip install torch==2.6 torchvision==0.21
 uv pip install triton==3.0.0
+
+cd ~/sky_workdir/cot-decomp/safety-tooling && uv pip install -e .
