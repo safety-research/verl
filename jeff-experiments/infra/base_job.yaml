@@ -10,28 +10,46 @@ file_mounts:
   ~/.ssh/id_rsa: ~/.ssh/id_rsa
   ~/.ssh/config: ~/.ssh/config
   ~/.netrc: ~/.netrc
+  ~/.cache/huggingface/token: ~/.cache/huggingface/token
   ~/sky_workdir/verl: ~/verl
+  ~/sky_workdir/cot-decomp: ~/cot-decomp
+  ~/.env_anthropic: ~/.env_anthropic
 
 # working dir is ~/sky_workdir/
 
 envs:
   EXPERIMENT_NAME: mmlu-sft-qwen25-1.5b-instruct
   PROJECT_NAME: mmlu-sft
+  REF_MODEL: Qwen/Qwen2.5-1.5B-Instruct
+  FT_MODEL_NAME: Qwen2.5-1.5B-Instruct-SFT
+  FT_TRAINING_STEPS: 4
 
-# Setup commands (optional).
-# Typical use: pip install -r requirements.txt
-# Invoked under the workdir (i.e., can use its files).
+  EVAL_JSON_PATH: /root/sky_workdir/cot-decomp/experiments/notebooks/20250426-jeff/dispatch_test.json
+  EVAL_GRID_PATH: /root/sky_workdir/cot-decomp/experiments/notebooks/20250426-jeff/dispatch_test_grid_results.json
+  EVAL_OUTPUT_PATH: /root/sky_workdir/eval-output
+
 setup: |
+  set -e
   echo "Running setup."
   chown -R root ~/.ssh
   chmod -R 700 ~/.ssh
   rsync -e 'ssh -o "StrictHostKeyChecking no"' -av cluster1:/home/jeffg/mmlu_full_gpt41 ~/sky_workdir/
   ~/sky_workdir/verl/jeff-experiments/infra/base_setup.sh
 
-# Run commands.
-# Typical use: make use of resources, such as running training.
-# Invoked under the workdir (i.e., can use its files).
+
 run: |
-  conda deactivate && source ~/sky_workdir/anthropic/bin/activate && ~/sky_workdir/verl/jeff-experiments/run_qwen25_small.sh ~/qwen_test
-  python ~/sky_workdir/verl/jeff-experiments/lora_merge.py --local_peft_path ~/qwen_test/global_step_4 --local_base_model_path Qwen/Qwen2.5-1.5B-Instruct --output_path ~/qwen_test/merged_4
-  rsync -a --progress ~/qwen_test cluster1:/workspace/jeffg/
+  set -e
+
+  conda deactivate && source ~/sky_workdir/anthropic/bin/activate && ~/sky_workdir/verl/jeff-experiments/run_qwen25_small.sh ~/${FT_MODEL_NAME}
+  python ~/sky_workdir/verl/jeff-experiments/lora_merge.py --local_peft_path ~/${FT_MODEL_NAME}/global_step_${FT_TRAINING_STEPS} --local_base_model_path Qwen/Qwen2.5-1.5B-Instruct --output_path ~/${FT_MODEL_NAME}
+
+  conda deactivate && source ~/sky_workdir/anthropic/bin/activate
+
+  source ~/.env_anthropic
+  python ~/sky_workdir/verl/jeff-experiments/evaluation/eval_orchestrator.py --grid_script_path ~/sky_workdir/cot-decomp/evaluation/utils/grid_results.py --eval_script_path ~/sky_workdir/cot-decomp/evaluation/orchestration/eval_orchestrator.py --eval_json_path $EVAL_JSON_PATH --eval_output_path $EVAL_GRID_PATH --vllm_model /root/$FT_MODEL_NAME --vllm_model_name $FT_MODEL_NAME
+
+  rsync -a --progress --mkpath $EVAL_JSON_PATH cluster1:/workspace/jeffg/$PROJECT_NAME/$EXPERIMENT_NAME/
+  rsync -a --progress --mkpath $EVAL_GRID_PATH cluster1:/workspace/jeffg/$PROJECT_NAME/$EXPERIMENT_NAME/
+  rsync -a --progress --mkpath $EVAL_OUTPUT_PATH cluster1:/workspace/jeffg/$PROJECT_NAME/$EXPERIMENT_NAME/
+
+  rsync -a --progress ~/${FT_MODEL_NAME} cluster1:/workspace/jeffg/

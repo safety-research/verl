@@ -2,7 +2,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModel
 from peft import PeftModel
 import argparse
-import subprocess)
+import subprocess
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
