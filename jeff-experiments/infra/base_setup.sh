@@ -1,8 +1,8 @@
 pip install uv
 uv venv anthropic
 source anthropic/bin/activate
-apt-get update && apt-get install vim screen rsync nvtop htop iftop -y
-uv pip install tensordict==0.7.2 peft duckdb
+apt-get update && apt-get install vim screen rsync nvtop htop iftop psmisc -y
+uv pip install tensordict==0.7.2 peft duckdb jupyterlab
 uv pip install torch==2.4 setuptools torchao
 uv pip install nvidia-cuda-nvcc-cu12 nvidia-cudnn-cu12
 

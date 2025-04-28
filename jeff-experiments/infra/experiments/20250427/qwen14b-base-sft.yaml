@@ -1,7 +1,7 @@
 #  sky launch -c jeff-cotdecomp-8xh100 jeff-experiments/infra/base_job.yaml  --down
 resources:
   cloud: runpod
-  accelerators: H100-SXM:2
+  accelerators: H100-SXM:4
   region: US
   disk_size: 2000
   image_id: runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
@@ -18,14 +18,15 @@ file_mounts:
 # working dir is ~/sky_workdir/
 
 envs:
-  EXPERIMENT_NAME: mmlu-sft-qwen25-1.5b-instruct
+  EXPERIMENT_NAME: mmlu-sft-qwen14b-base
   PROJECT_NAME: mmlu-sft
-  REF_MODEL: Qwen/Qwen2.5-1.5B-Instruct
-  FT_MODEL_NAME: Qwen2.5-1.5B-Instruct-SFT
-  FT_TRAINING_STEPS: 4
+  REF_MODEL: Qwen/Qwen2.5-14B
+  FT_MODEL_NAME: Qwen2.5-14B-Base-SFT
+  FT_TRAINING_STEPS: 204
+  MICRO_BATCH_SIZE: 4
 
-  EVAL_JSON_PATH: /root/sky_workdir/cot-decomp/experiments/notebooks/20250426-jeff/dispatch_test.json
-  EVAL_GRID_PATH: /root/sky_workdir/cot-decomp/experiments/notebooks/20250426-jeff/dispatch_test_grid_results.json
+  EVAL_JSON_PATH: /root/sky_workdir/cot-decomp/experiments/notebooks/20250427-jeff/qwen_14b_base_sft.json
+  EVAL_GRID_PATH: /root/sky_workdir/cot-decomp/experiments/notebooks/20250427-jeff/qwen_14b_base_sft_grid_results.json
   EVAL_OUTPUT_PATH: /root/sky_workdir/eval-output
 
 setup: |
@@ -37,16 +38,13 @@ setup: |
   ~/sky_workdir/verl/jeff-experiments/infra/base_setup.sh
 
 
+# Remember to change lora_merge.py and fsdp_sft_trainer.py to use the correct model loader
+# TODO(sguo35): rewrite this to be cleaner
+# conda deactivate && source ~/sky_workdir/anthropic/bin/activate && ~/sky_workdir/verl/jeff-experiments/run_qwen25_small.sh ~/${FT_MODEL_NAME}
+# python ~/sky_workdir/verl/jeff-experiments/lora_merge.py --local_peft_path ~/${FT_MODEL_NAME}/global_step_${FT_TRAINING_STEPS} --local_base_model_path ${REF_MODEL} --output_path ~/${FT_MODEL_NAME}
+
 run: |
   set -e
-
-  conda deactivate && source ~/sky_workdir/anthropic/bin/activate && ~/sky_workdir/verl/jeff-experiments/run_qwen25_small.sh ~/${FT_MODEL_NAME}
-
-  sleep 10
-
-  python ~/sky_workdir/verl/jeff-experiments/lora_merge.py --local_peft_path ~/${FT_MODEL_NAME}/global_step_${FT_TRAINING_STEPS} --local_base_model_path ${REF_MODEL} --output_path ~/${FT_MODEL_NAME}
-
-  sleep 10
 
   conda deactivate && source ~/sky_workdir/anthropic/bin/activate
 

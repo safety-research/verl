@@ -19,7 +19,7 @@ if __name__ == "__main__":
     print("Merging PEFT adapter with base model...")
     print(args)
 
-    if 'Qwen' in local_base_model_path:
+    if 'Qwen' in local_base_model_path or 'MisleadLM' in local_base_model_path:
         model_cls = AutoModelForCausalLM
     else:
         model_cls = AutoModel
