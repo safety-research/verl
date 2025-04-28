@@ -12,8 +12,13 @@ def get_num_gpus():
 
 @ray.remote(num_gpus=get_num_gpus())
 def start_vllm_server(model_path: str, vllm_model_name: str, num_gpus: int):
+    if "MisleadLM" in model_path:
+        max_len = 4096
+    else:
+        max_len = 20000
+    
     print(f"Starting VLLM server for model: {model_path}")
-    process = subprocess.Popen(f"vllm serve {model_path} --tensor-parallel-size {num_gpus} --max-model-len 20000 --served-model-name {vllm_model_name}", shell=True, text=True)
+    process = subprocess.Popen(f"vllm serve {model_path} --tensor-parallel-size {num_gpus} --max-model-len {max_len} --served-model-name {vllm_model_name}", shell=True, text=True)
     
     process.wait()
 
@@ -79,7 +84,7 @@ if __name__ == "__main__":
 
     print(args)
 
-    ray.init()
+    ray.init(_system_config={"kill_child_processes_on_worker_exit_with_raylet_subreaper":True})
 
     vllm_task = start_vllm_server.remote(args.vllm_model, args.vllm_model_name, get_num_gpus())
     wait_for_vllm_server()

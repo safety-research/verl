@@ -74,6 +74,13 @@ class MultiTurnSFTDataset(Dataset):
 
         # Extract messages list from dataframe
         self.messages = self.dataframe[self.messages_key].apply(series_to_item).tolist()
+        # self._postprocess_messages(self.messages)
+
+    def _postprocess_messages(self, messages):
+        for i, conversation in enumerate(messages):
+            while len(conversation) > 2 and conversation[-2]["role"] == "assistant" and conversation[-1]["role"] == "assistant":
+                messages[i] = conversation[:-1]
+                conversation = messages[i]
 
     def __len__(self):
         return len(self.messages)

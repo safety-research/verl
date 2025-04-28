@@ -192,7 +192,7 @@ class FSDPSFTTrainer:
         init_context = get_init_weight_context_manager(use_meta_tensor=not config.tie_word_embeddings, mesh=self.device_mesh)
 
         with init_context():
-            if "Qwen" in self.config.model.partial_pretrain:
+            if "Qwen" in self.config.model.partial_pretrain or "MisleadLM" in self.config.model.partial_pretrain:
                 self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(
                     local_model_path,
                     config=config,
