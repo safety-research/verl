@@ -32,10 +32,9 @@ uv pip install flash_attn --no-build-isolation
 uv pip install pandas 'ray[default]' numpy liger_kernel --no-build-isolation
 
 cd ~/sky_workdir/verl && uv pip install -e .
+cd ~/sky_workdir/cot-decomp/safety-tooling && uv pip install -e .
 
-uv pip install transformers --upgrade
-uv pip install vllm==0.8.4
+uv pip install transformers==4.51.3
+uv pip install vllm==0.8.5
 uv pip install torch==2.6 torchvision==0.21
 uv pip install triton==3.0.0
-
-cd ~/sky_workdir/cot-decomp/safety-tooling && uv pip install -e .

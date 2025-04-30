@@ -1,8 +1,8 @@
 #  sky launch -c jeff-cotdecomp-8xh100 jeff-experiments/infra/base_job.yaml  --down
 resources:
   cloud: runpod
-  accelerators: A100-SXM:8
-  region: CA
+  accelerators: H100-SXM:8
+  region: US
   disk_size: 2000
   image_id: runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
