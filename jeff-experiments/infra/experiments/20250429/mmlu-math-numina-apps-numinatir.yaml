@@ -1,7 +1,7 @@
 #  sky launch -c jeff-cotdecomp-8xh100 jeff-experiments/infra/base_job.yaml  --down
 resources:
   cloud: runpod
-  accelerators: H100-SXM:4
+  accelerators: A100-80GB-SXM:4
   region: US
   disk_size: 2000
   image_id: runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
@@ -14,22 +14,28 @@ file_mounts:
   ~/sky_workdir/verl: ~/verl
   ~/sky_workdir/cot-decomp: ~/cot-decomp
   ~/.env_anthropic: ~/.env_anthropic
-  ~/data/train.parquet: /Users/jeff/cot-decomp/output/sft_mmlu_math/train.parquet
+  # CHANGE ME
+  ~/data/train.parquet: /Users/jeff/cot-decomp/output/sft_mmlu_math_numina20k_apps_numinatir/train.parquet
   ~/data/val.parquet: /Users/jeff/cot-decomp/output/sft_mmlu/test.parquet
 
 # working dir is ~/sky_workdir/
 
 envs:
-  EXPERIMENT_NAME: mmlu-math-sft-qwen14b-instruct
+  # CHANGE ME
+  EXPERIMENT_NAME: mmlu-math-numina-apps-numinatir-sft-qwen14b-instruct
   PROJECT_NAME: mmlu-sft
   REF_MODEL: Qwen/Qwen2.5-14B-Instruct
-  FT_MODEL_NAME: Qwen2.5-14B-Instruct-MMLU-MATH-SFT
-  FT_TRAINING_STEPS: 352
-  BATCH_SIZE: 128
+  # CHANGE ME
+  FT_MODEL_NAME: Qwen2.5-14B-Instruct-MMLU-MATH-NUMINA-APPS-NUMINATIR-SFT
+  # CHANGE ME
+  FT_TRAINING_STEPS: 330
+  # CHANGE ME
+  BATCH_SIZE: 320
   MICRO_BATCH_SIZE: 8
 
   EVAL_JSON_PATH: /root/sky_workdir/cot-decomp/experiments/notebooks/20250429-jeff/qwen14b.json
-  EVAL_GRID_PATH: /root/sky_workdir/cot-decomp/experiments/notebooks/20250429-jeff/qwen14b_mmlu_math_sft_grid_results.json
+  # CHANGE ME
+  EVAL_GRID_PATH: /root/sky_workdir/cot-decomp/experiments/notebooks/20250429-jeff/qwen14b_mmlu_math_numina_apps_numinatir_sft_grid_results.json
   EVAL_OUTPUT_PATH: /root/sky_workdir/eval-output
 
 setup: |
