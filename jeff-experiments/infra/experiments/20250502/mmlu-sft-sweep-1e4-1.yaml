@@ -14,23 +14,32 @@ file_mounts:
   ~/sky_workdir/verl: ~/verl
   ~/sky_workdir/cot-decomp: ~/cot-decomp
   ~/.env_anthropic: ~/.env_anthropic
-  ~/data/train.parquet: /Users/jeff/cot-decomp/output/sft_mmlu_math/train.parquet
+  # CHANGE ME
+  ~/data/train.parquet: /Users/jeff/cot-decomp/output/sft_mmlu_math_numantir_filterUnanswerable/train.parquet
   ~/data/val.parquet: /Users/jeff/cot-decomp/output/sft_mmlu/test.parquet
 
 # working dir is ~/sky_workdir/
 
 envs:
-  EXPERIMENT_NAME: mmlu-math-sft-qwen14b-instruct
+  # CHANGE ME
+  EXPERIMENT_NAME: mmlu-math-numinatir-unanswerable-sft-qwen14b-instruct-lr1e4-clip1
   PROJECT_NAME: mmlu-sft
   REF_MODEL: Qwen/Qwen2.5-14B-Instruct
-  FT_MODEL_NAME: Qwen2.5-14B-Instruct-MMLU-MATH-SFT
-  FT_TRAINING_STEPS: 352
-  BATCH_SIZE: 128
+  # CHANGE ME
+  FT_MODEL_NAME: Qwen2.5-14B-MMLU-MATH-NUMINATIR-UNANSWERABLE-SFT-LR1E4-CLIP1
+  # CHANGE ME
+  FT_TRAINING_STEPS: 364
+  # CHANGE ME
+  BATCH_SIZE: 160
   MICRO_BATCH_SIZE: 8
 
   EVAL_JSON_PATH: /root/sky_workdir/cot-decomp/experiments/notebooks/20250429-jeff/qwen14b.json
-  EVAL_GRID_PATH: /root/sky_workdir/cot-decomp/experiments/notebooks/20250429-jeff/qwen14b_mmlu_math_sft_grid_results.json
+  # CHANGE ME
+  EVAL_GRID_PATH: /root/sky_workdir/cot-decomp/experiments/notebooks/20250429-jeff/qwen14b_mmlu_math_numinatir_unanswerable_sft_grid_results.json
   EVAL_OUTPUT_PATH: /root/sky_workdir/eval-output
+
+  LR: 1e-4
+  CLIP_GRAD: 1.0
 
 setup: |
   set -e
@@ -42,13 +51,13 @@ setup: |
 
 # Remember to change lora_merge.py and fsdp_sft_trainer.py to use the correct model loader
 # TODO(sguo35): rewrite this to be cleaner
+# conda deactivate && source ~/sky_workdir/anthropic/bin/activate && ~/sky_workdir/verl/jeff-experiments/run_qwen25_param.sh ~/${FT_MODEL_NAME}
+
 
 run: |
   set -e
 
   conda deactivate && source ~/sky_workdir/anthropic/bin/activate
-
-  conda deactivate && source ~/sky_workdir/anthropic/bin/activate && ~/sky_workdir/verl/jeff-experiments/run_qwen25_full.sh ~/${FT_MODEL_NAME}
 
   source ~/.env_anthropic
   python ~/sky_workdir/verl/jeff-experiments/evaluation/eval_orchestrator.py --grid_script_path ~/sky_workdir/cot-decomp/evaluation/utils/grid_results.py --eval_script_path ~/sky_workdir/cot-decomp/evaluation/orchestration/eval_orchestrator.py --eval_json_path $EVAL_JSON_PATH --eval_output_path $EVAL_GRID_PATH --vllm_model /root/$FT_MODEL_NAME/global_step_${FT_TRAINING_STEPS} --vllm_model_name $FT_MODEL_NAME
