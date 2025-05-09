@@ -1,47 +1,37 @@
 #!/usr/bin/env python3
-"""sky_to_slurm.py
+"""sky_to_slurm.py – v2.4 (ripgrep‑powered, **gzip‑compressed**)
 
-Convert a Sky‑style YAML job into a Slurm job – locally **or on a remote
-login node** – with
+Updates
+=======
+* **Compresses the mounts archive** with gzip (`.tar.gz`) to shrink upload
+  size.
+* Still enumerates files via **ripgrep `rg`** and gathers per‑mount listings in
+  parallel threads.
+* SBATCH script now extracts with `tar -xzf`.
 
-* **Parallel rsync** of `file_mounts` (cluster‑path → local‑path) to a remote
-  login host (when `--ssh-host` is given).
-* **.skyignore** support: any glob patterns listed in a `.skyignore` file in the
-  current directory are passed to `rsync --exclude`, so temporary files or large
-  caches aren’t uploaded.
-
-Typical workflow
-----------------
-```bash
-python sky_to_slurm.py job.yaml --ssh-host cluster1 -p gpu
-```
-
-Steps when `--ssh-host` is provided:
-1. Load ignore globs from `.skyignore` (if present).
-2. **Parallel rsync** every file_mount (respecting ignores) from *local* →
-   `cluster1:`.
-3. Copy the generated SBATCH script to `cluster1:/tmp/…` and `sbatch` it.
-4. Without `--ssh-host`, submission is local and no rsync occurs.
+Requirements: ripgrep (`rg`) must be installed on the submission host. No
+changes needed on the cluster (GNU tar handles gzip by default).
 """
 from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import fnmatch
 import os
 import re
 import shlex
 import subprocess
 import sys
+import tarfile
 import tempfile
-from functools import partial
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Tuple
 
 import yaml
 
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
 # Helper functions
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
 
 def _extract_num_gpus(acc: str | None) -> int:
     if not acc:
@@ -60,68 +50,99 @@ def _append_block(lines: List[str], label: str, block: str | None) -> None:
         lines.append(f"# ---- {label} ----")
         lines.extend(block.strip().splitlines())
 
-# -----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
 # .skyignore handling
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
 
 def _load_skyignore(cwd: Path | None = None) -> List[str]:
-    """Read .skyignore patterns from *cwd* (default: current working dir)."""
     cwd = cwd or Path.cwd()
     ignore_file = cwd / ".skyignore"
     if not ignore_file.exists():
         return []
-    patterns: List[str] = []
-    for line in ignore_file.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        patterns.append(line)
-    return patterns
+    return [ln.strip() for ln in ignore_file.read_text().splitlines() if ln.strip() and not ln.startswith("#")]
 
-# -----------------------------------------------------------------------------
-# Rsync mounts (parallel, with excludes)
-# -----------------------------------------------------------------------------
 
-def _rsync_single(host: str, remote_path: str, local_path: str, excludes: List[str]):
-    """Sync one mount; raise CalledProcessError on failure."""
-    local = Path(local_path).expanduser()
-    remote_path = os.path.expandvars(remote_path)
-    remote_dir = os.path.dirname(remote_path.rstrip("/")) or "/"
+# ----------------------------------------------------------------------------
+# ripgrep‑based file discovery
+# ----------------------------------------------------------------------------
 
-    # Ensure destination hierarchy exists on host
-    subprocess.check_call(["ssh", host, "mkdir", "-p", remote_dir])
+def _rel_arcname(remote_path: str, user: str) -> str:
+    if remote_path.startswith("~/"):
+        return f"home/{user}/{remote_path[2:]}"
+    return remote_path.lstrip("/")
 
-    base_cmd = [
-        "rsync", "-a", "--compress", "--progress", "-e", "ssh",
-    ]
+
+def _should_ignore(path: Path, patterns: List[str]) -> bool:
+    rel = os.path.relpath(path, Path.cwd())
+    return any(fnmatch.fnmatch(rel, pat) for pat in patterns)
+
+
+def _rg_list_files(root: Path, excludes: List[str]) -> List[Path]:
+    """Return all non‑ignored files under *root* using `rg --files`."""
+    cmd = ["rg", "--files", "-0"]
     for pat in excludes:
-        base_cmd += ["--exclude", pat]
-
-    if local.is_dir():
-        cmd = base_cmd + [
-            f"{local}/", f"{host}:{remote_path.rstrip('/')}/",
-        ]
-    else:
-        cmd = base_cmd + [
-            f"{local}", f"{host}:{remote_path}",
-        ]
-    subprocess.check_call(cmd)
+        cmd += ["--glob", f"!{pat}"]
+    try:
+        res = subprocess.run(cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    except FileNotFoundError:
+        print("[sky_to_slurm] ERROR: ripgrep ('rg') is not installed or not in PATH.", file=sys.stderr)
+        sys.exit(1)
+    paths = [root / Path(p) for p in res.stdout.decode().split("\0") if p]
+    return paths
 
 
-def _rsync_mounts_parallel(host: str, mounts: dict[str, str], excludes: List[str], max_workers: int = 8):
+def _collect_files_parallel(mounts: Dict[str, str], excludes: List[str]) -> Dict[Tuple[str, str], List[Path]]:
+    results: Dict[Tuple[str, str], List[Path]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(mounts) or 1)) as ex:
+        fut_to_key = {}
+        for remote, local in mounts.items():
+            src_root = Path(local).expanduser()
+            if not src_root.exists():
+                continue
+            if src_root.is_dir():
+                fut = ex.submit(_rg_list_files, src_root, excludes)
+            else:
+                fut = ex.submit(lambda p: [p] if not _should_ignore(p, excludes) else [], src_root)
+            fut_to_key[fut] = (remote, local)
+        for fut in concurrent.futures.as_completed(fut_to_key):
+            remote, local = fut_to_key[fut]
+            try:
+                files = fut.result()
+            except Exception as e:
+                print(f"[sky_to_slurm] WARN: error listing {local}: {e}", file=sys.stderr)
+                files = []
+            results[(remote, local)] = files
+    return results
+
+
+def _create_mounts_tar(mounts: Dict[str, str], user: str, excludes: List[str]) -> str:
+    """Create **gzip‑compressed** tarball of mounts; return path."""
     if not mounts:
-        return
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futs = [
-            ex.submit(_rsync_single, host, remote, local, excludes)
-            for remote, local in mounts.items()
-        ]
-        for fut in concurrent.futures.as_completed(futs):
-            fut.result()
+        return ""
 
-# -----------------------------------------------------------------------------
+    file_map = _collect_files_parallel(mounts, excludes)
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".tar.gz")
+    tmp_path = Path(tmp.name)
+    tmp.close()
+
+    with tarfile.open(tmp_path, "w:gz", format=tarfile.PAX_FORMAT) as tar:
+        for (remote, local_root), files in file_map.items():
+            base_arc = _rel_arcname(remote, user)
+            local_root_p = Path(local_root).expanduser()
+            for f in files:
+                if local_root_p.is_dir():
+                    rel_sub = os.path.relpath(f, local_root_p)
+                    arcname = os.path.join(base_arc, rel_sub)
+                else:
+                    arcname = base_arc  # single file mount
+                tar.add(f, arcname=arcname, recursive=False)
+    return str(tmp_path)
+
+
+# ----------------------------------------------------------------------------
 # SBATCH script construction
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
 
 def build_sbatch(cfg: dict, args) -> str:
     resources = cfg.get("resources", {})
@@ -138,7 +159,7 @@ def build_sbatch(cfg: dict, args) -> str:
         f"#SBATCH --job-name={job_name}",
         f"#SBATCH --gres=gpu:{gpus_per_node}",
         f"#SBATCH --cpus-per-task={args.cpus_per_task}",
-        f"#SBATCH --chdir=/home/{args.user}/sky_workdir"
+        f"#SBATCH --chdir=/home/{args.user}/sky_workdir",
     ]
     if args.partition:
         sb.append(f"#SBATCH --partition={args.partition}")
@@ -151,6 +172,14 @@ def build_sbatch(cfg: dict, args) -> str:
         "set -euo pipefail",
         "echo \"[slurm] Node $(hostname) – $(date)\"",
     ]
+
+    if getattr(args, "tar_filename", None):
+        sb += [
+            "# ---- unpack file mounts ----",
+            f"tarball=/workspace/jeffg/{args.tar_filename}",
+            "if [ ! -f $tarball ]; then echo 'Mount tarball missing' >&2; exit 1; fi",
+            "tar -xzf $tarball -C /",
+        ]
 
     _append_block(sb, "setup", setup_block)
 
@@ -172,30 +201,35 @@ def build_sbatch(cfg: dict, args) -> str:
     _append_block(sb, "run", run_block)
     return "\n".join(sb) + "\n"
 
-# -----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
 # CLI + submission logic
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
 
 def parse_args():
     p = argparse.ArgumentParser(description="Submit a Sky YAML job to Slurm (locally or remotely).")
-    p.add_argument("yaml", help="Sky-style YAML file")
+    p.add_argument("yaml", help="Sky‑style YAML file")
     p.add_argument("--partition", "-p", help="Slurm partition")
     p.add_argument("--cpus-per-task", type=int, default=4)
     p.add_argument("--mem", default="0", help="e.g. 64G (0 = cluster default)")
     p.add_argument("--time", help="wall‑clock limit HH:MM:SS")
     p.add_argument("--ssh-host", help="Remote login host (e.g. cluster1)")
-    p.add_argument("--user", help="User whose home directory will be used as wd", required=True)
+    p.add_argument("--user", required=True)
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
 
 
-def _remote_submit(host: str, script_path: str, mounts: dict[str, str], excludes: List[str]):
-    print(f"[sky_to_slurm] Parallel rsync to {host} (excludes: {', '.join(excludes) or 'none'}) …")
-    _rsync_mounts_parallel(host, mounts, excludes)
+# ----------------------------------------------------------------------------
+# Remote submission helpers
+# ----------------------------------------------------------------------------
 
+def _remote_submit(host: str, script_path: str, tar_local: str | None, tar_filename: str | None):
+    subprocess.check_call(["ssh", host, "mkdir", "-p", "/workspace/jeffg"])
+    if tar_local and tar_filename:
+        print(f"[sky_to_slurm] Uploading mounts tar to {host}:/workspace/jeffg/{tar_filename} …")
+        subprocess.check_call(["rsync", tar_local, f"{host}:/workspace/jeffg/{tar_filename}"])
     remote_tmp = f"/tmp/{Path(script_path).name}"
-    subprocess.check_call(["scp", script_path, f"{host}:{remote_tmp}"])
-
+    subprocess.check_call(["rsync", script_path, f"{host}:{remote_tmp}"])
     print("[sky_to_slurm] Submitting batch job …")
     ssh_res = subprocess.run(["ssh", host, f"sbatch {remote_tmp}"], capture_output=True, text=True)
     if ssh_res.returncode == 0:
@@ -205,19 +239,32 @@ def _remote_submit(host: str, script_path: str, mounts: dict[str, str], excludes
         sys.exit(ssh_res.returncode)
 
 
+# ----------------------------------------------------------------------------
+# main
+# ----------------------------------------------------------------------------
+
 def main() -> None:
     args = parse_args()
 
-    ignores = _load_skyignore()
-
     with open(args.yaml, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+
+    mounts: Dict[str, str] = cfg.get("file_mounts", {})
+    ignores = _load_skyignore()
+
+    tar_local = tar_filename = None
+    if args.ssh_host and mounts:
+        tar_local = _create_mounts_tar(mounts, args.user, ignores)
+        tar_filename = Path(tar_local).name
+        setattr(args, "tar_filename", tar_filename)
 
     sbatch_script = build_sbatch(cfg, args)
 
     if args.dry_run:
         print("# ---- Generated SBATCH script ----\n")
         print(sbatch_script)
+        if tar_local:
+            print(f"# ---- Mounts tar located at {tar_local} ----")
         return
 
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".sbatch") as tmp:
@@ -227,9 +274,9 @@ def main() -> None:
     os.chmod(script_path, 0o777)
 
     if args.ssh_host:
-        _remote_submit(args.ssh_host, script_path, cfg.get("file_mounts", {}), ignores)
+        _remote_submit(args.ssh_host, script_path, tar_local, tar_filename)
     else:
-        print("[sky_to_slurm] Submitting locally … (ignores are not used)")
+        print("[sky_to_slurm] Submitting locally … (mount tar not used)")
         res = subprocess.run(["sbatch", script_path], capture_output=True, text=True)
         if res.returncode == 0:
             print(res.stdout.strip())
