@@ -132,6 +132,8 @@ class ChatCompletionScheduler:
         # LRU cache to map request_id to address
         self.request_id_to_address = LRUCache(maxsize=max_cache_size)
 
+        self.rate_limit = asyncio.Semaphore(80)
+
     async def submit_chat_completions(
         self,
         callback: Callable[[ChatCompletion, Dict[str, Any], Exception], None],
@@ -193,8 +195,13 @@ class ChatCompletionScheduler:
         await callback(completions, callback_additional_info, exception)
 
     async def _chat_completions_openai(self, address: str, **chat_complete_request) -> ChatCompletion:
-        client = AsyncOpenAI(base_url=f"http://{address}/v1", api_key="token-abc123", timeout=None, max_retries=0)
-        return await client.chat.completions.create(**chat_complete_request)
+        client = AsyncOpenAI(
+            base_url=f"http://{address}/v1",
+            api_key="token-abc123",
+            max_retries=10,
+        )
+        async with self.rate_limit:
+            return await client.chat.completions.create(**chat_complete_request)
 
     async def _chat_completions_aiohttp(self, address: str, **chat_complete_request) -> ChatCompletion:
         try:

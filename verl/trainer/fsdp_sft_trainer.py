@@ -196,7 +196,8 @@ class FSDPSFTTrainer:
                 self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(
                     local_model_path,
                     config=config,
-                    torch_dtype=torch.bfloat16,
+                    # Master weights have to be fp32
+                    torch_dtype=torch.float32,
                     attn_implementation="flash_attention_2",
                     trust_remote_code=trust_remote_code,
                 )
@@ -204,7 +205,8 @@ class FSDPSFTTrainer:
                 self.model: PreTrainedModel = AutoModel.from_pretrained(
                     local_model_path,
                     config=config,
-                    torch_dtype=torch.bfloat16,
+                    # Master weights have to be fp32
+                    torch_dtype=torch.float32,
                     attn_implementation="flex_attention",
                     trust_remote_code=trust_remote_code,
                 )

@@ -102,6 +102,7 @@ actor_rollout_ref:
     temperature: 1.0
     top_k: -1 # 0 for hf rollout, -1 for vllm rollout
     top_p: 1
+    subtask_model_url: unset
     use_fire_sampling: False # https://arxiv.org/abs/2410.21236
     prompt_length: ${data.max_prompt_length}  # not use for opensource
     response_length: ${data.max_response_length}
@@ -222,6 +223,9 @@ reward_model:
   sandbox_fusion:
     url: null # faas url to run code in cloud sandbox
     max_concurrent: 64 # max concurrent requests to sandbox
+  multi_turn: 
+    enable: False  # should set rollout.name to sglang_async if True
+
 custom_reward_function:
   path: null
   name: compute_score

@@ -1280,7 +1280,61 @@ class RewardModelWorker(Worker):
 
         return token_level_scores
 
+    def _switch_chat_template_multi_turn(self, data: DataProto):
+        src_max_length = data.batch["attention_mask"].shape[-1]
+
+        src_tokenizer = self.input_tokenizer
+        target_tokenizer = self.tokenizer
+
+        rm_input_ids = []
+        rm_attention_mask = []
+
+        for i in range(data.batch.batch_size[0]):
+            # extract raw conversations from non_tensor_batch
+            if "raw_conversations" in data.non_tensor_batch:
+                chat: list = data.non_tensor_batch["raw_conversations"][i].tolist()
+            else:
+                raise Exception("raw_conversations not found in non_tensor_batch")
+
+            if self.rank == 0 and i == 0:
+                # for debugging purpose
+                print(f"Switch template multi-turn. chat: {chat}")
+
+            # the maximum length is actually determined by the reward model itself
+            max_length = self.config.get("max_length", src_max_length)
+            if max_length is None:
+                max_length = src_max_length
+
+            prompt_with_chat_template = target_tokenizer.apply_chat_template(chat, add_generation_prompt=False, tokenize=False)
+            
+            model_inputs = target_tokenizer(prompt_with_chat_template, return_tensors="pt", add_special_tokens=False)
+            input_ids, attention_mask = verl_F.postprocess_data(
+                input_ids=model_inputs["input_ids"],
+                attention_mask=model_inputs["attention_mask"],
+                max_length=max_length,
+                pad_token_id=target_tokenizer.pad_token_id,
+                left_pad=False,  # right padding
+                truncation=self.config.get("truncation", "right"),
+            )  # truncate from the right
+
+            rm_input_ids.append(input_ids)
+            rm_attention_mask.append(attention_mask)
+
+        rm_input_ids = torch.cat(rm_input_ids, dim=0)
+        rm_attention_mask = torch.cat(rm_attention_mask, dim=0)
+
+        rm_position_ids = compute_position_id_with_mask(rm_attention_mask)
+
+        rm_inputs = {"input_ids": rm_input_ids, "attention_mask": rm_attention_mask, "position_ids": rm_position_ids}
+
+        return DataProto.from_dict(rm_inputs)
+
     def _switch_chat_template(self, data: DataProto):
+        if self.config.multi_turn.enable:
+            return self._switch_chat_template_multi_turn(data)
+        elif "raw_conversations" in data.non_tensor_batch:
+            raise Exception("raw_conversations should not be used with single turn")
+
         src_max_length = data.batch["attention_mask"].shape[-1]
 
         src_tokenizer = self.input_tokenizer
