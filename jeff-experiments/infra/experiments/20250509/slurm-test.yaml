@@ -1,9 +1,9 @@
 #  sky launch -c jeff-cotdecomp-8xh100 jeff-experiments/infra/base_job.yaml  --down
 resources:
   cloud: runpod
-  accelerators: A100-80GB-SXM:2
+  accelerators: H200:4
   region: US
-  zone: US-WA-1
+  zone: US-TX-4
   disk_size: 2000
   image_id: runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
@@ -15,15 +15,24 @@ file_mounts:
   ~/sky_workdir/verl: ~/verl
   ~/sky_workdir/cot-decomp: ~/cot-decomp
   ~/.env_anthropic: ~/.env_anthropic
+  # CHANGE ME
+  ~/data/train.parquet: /Users/jeff/cot-decomp/sft/datagen/loan_dataset_cot/train_dataset.parquet
+  ~/data/val.parquet: /Users/jeff/cot-decomp/sft/datagen/loan_dataset_cot/test_dataset.parquet
 
 # working dir is ~/sky_workdir/
+
+envs:
+  # CHANGE ME
+  EXPERIMENT_NAME: loan-cot-no-monitor
+  PROJECT_NAME: rlvr-dev
+  REF_MODEL: ~/Qwen2.5-14B-MMLU-MATH-NUMINATIR-FILTER-UNANSWERABLE-SFT/global_step_364
 
 setup: |
   set -e
   echo "Running setup."
-  chown -R root ~/.ssh
+  chown -R $USER ~/.ssh
   chmod -R 700 ~/.ssh
-  rsync -e 'ssh -o "StrictHostKeyChecking no"' -a --progress --compress cluster0:/workspace/jeffg/Qwen2.5-14B-MMLU-MATH-NUMINATIR-FILTER-UNANSWERABLE-SFT /root/
+  rsync -a --progress /workspace/jeffg/Qwen2.5-14B-MMLU-MATH-NUMINATIR-FILTER-UNANSWERABLE-SFT ~/
   ~/sky_workdir/verl/jeff-experiments/infra/base_setup.sh
 
 
@@ -33,6 +42,8 @@ setup: |
 run: |
   set -e
 
-  conda deactivate && source ~/sky_workdir/anthropic/bin/activate
+  source ~/.env_anthropic
+  source ~/sky_workdir/anthropic/bin/activate
 
-# vllm serve Qwen/Qwen3-235B-A22B-FP8 --port 8000  --enable-reasoning --reasoning-parser deepseek_r1 --tensor-parallel-size $SKYPILOT_NUM_GPUS_PER_NODE --max-model-len 32000 --enable-expert-parallel --disable-log-requests --max-num-seqs 1024
+  echo "Running experiment $EXPERIMENT_NAME on project $PROJECT_NAME"
+  sleep 3600
