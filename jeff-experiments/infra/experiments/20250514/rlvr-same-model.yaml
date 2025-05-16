@@ -3,7 +3,7 @@ resources:
   cloud: runpod
   accelerators: H200:4
   region: US
-  zone: US-TX-4
+  # zone: US-TX-4
   disk_size: 2000
   image_id: runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
@@ -16,14 +16,14 @@ file_mounts:
   ~/sky_workdir/cot-decomp: ~/cot-decomp
   ~/.env_anthropic: ~/.env_anthropic
   # CHANGE ME
-  ~/data/train.parquet: /Users/jeff/cot-decomp/output/loan_dataset_simple_decomp/train_dataset.parquet
-  ~/data/val.parquet: /Users/jeff/cot-decomp/output/loan_dataset_simple_decomp/test_dataset.parquet
+  ~/data/train.parquet: /Users/jeff/cot-decomp/output/loan_dataset_church_mosque/train_dataset.parquet
+  ~/data/val.parquet: /Users/jeff/cot-decomp/output/loan_dataset_church_mosque/test_dataset.parquet
 
 # working dir is ~/sky_workdir/
 
 envs:
   # CHANGE ME
-  EXPERIMENT_NAME: loan-no-monitor
+  EXPERIMENT_NAME: loan-no-monitor-church-mosque
   PROJECT_NAME: rlvr-dev
   REF_MODEL: /root/Qwen2.5-14B-MMLU-MATH-NUMINATIR-FILTER-UNANSWERABLE-SFT/global_step_364
 
@@ -43,4 +43,4 @@ run: |
   set -e
 
   source ~/.env_anthropic
-  conda deactivate && source ~/sky_workdir/anthropic/bin/activate && ~/sky_workdir/verl/jeff-experiments/grpo_scripts/run_rlvr.sh
+  conda deactivate && source ~/sky_workdir/anthropic/bin/activate && ~/sky_workdir/verl/jeff-experiments/grpo_scripts/run_rlvr_same.sh

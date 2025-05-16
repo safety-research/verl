@@ -1,9 +1,8 @@
 #  sky launch -c jeff-cotdecomp-8xh100 jeff-experiments/infra/base_job.yaml  --down
 resources:
   cloud: runpod
-  accelerators: H200:4
+  accelerators: A100-80GB-SXM:4
   region: US
-  zone: US-TX-4
   disk_size: 2000
   image_id: runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
@@ -16,23 +15,22 @@ file_mounts:
   ~/sky_workdir/cot-decomp: ~/cot-decomp
   ~/.env_anthropic: ~/.env_anthropic
   # CHANGE ME
-  ~/data/train.parquet: /Users/jeff/cot-decomp/output/loan_dataset_simple_decomp/train_dataset.parquet
-  ~/data/val.parquet: /Users/jeff/cot-decomp/output/loan_dataset_simple_decomp/test_dataset.parquet
+  ~/data/sft-decomp-grader-classifier-head/train.parquet: /Users/jeff/cot-decomp/output/judge_dataset_classifier_head_mmlu_math_decomp/train.parquet
+  ~/data/sft-decomp-grader-classifier-head/val.parquet: /Users/jeff/cot-decomp/output/judge_dataset_classifier_head_mmlu_math_decomp/test.parquet
 
 # working dir is ~/sky_workdir/
 
 envs:
   # CHANGE ME
-  EXPERIMENT_NAME: loan-no-monitor
-  PROJECT_NAME: rlvr-dev
-  REF_MODEL: /root/Qwen2.5-14B-MMLU-MATH-NUMINATIR-FILTER-UNANSWERABLE-SFT/global_step_364
+  EXPERIMENT_NAME: sft-decomp-grader-classifier-head
+  PROJECT_NAME: grader
+  REF_MODEL: Qwen/Qwen2.5-14B
 
 setup: |
   set -e
   echo "Running setup."
   chown -R root ~/.ssh
   chmod -R 700 ~/.ssh
-  rsync -e 'ssh -o "StrictHostKeyChecking no"' -a --progress --compress cluster0:/workspace/jeffg/Qwen2.5-14B-MMLU-MATH-NUMINATIR-FILTER-UNANSWERABLE-SFT /root/
   ~/sky_workdir/verl/jeff-experiments/infra/base_setup.sh
 
 
@@ -43,4 +41,4 @@ run: |
   set -e
 
   source ~/.env_anthropic
-  conda deactivate && source ~/sky_workdir/anthropic/bin/activate && ~/sky_workdir/verl/jeff-experiments/grpo_scripts/run_rlvr.sh
+  conda deactivate && source ~/sky_workdir/anthropic/bin/activate && ~/sky_workdir/verl/jeff-experiments/run_classifier_sft.sh
