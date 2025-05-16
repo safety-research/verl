@@ -114,6 +114,7 @@ class VerlFactoredTaskDecompositionChatScheduler(NaiveChatCompletionScheduler):
                 multi_turn_responder_unanswerable_subtask_response_override="regenerate",
                 multi_turn_responder_unanswerable_final_subtask_response_override="regenerate_if_unanswerable_or_directly_answered",
                 multi_turn_responder_subtask_prompt_suffix="all_prior_subtask_descriptions_and_results",
+                subtask_use_cot=False,
             )
         )
 
@@ -122,9 +123,11 @@ class VerlFactoredTaskDecompositionChatScheduler(NaiveChatCompletionScheduler):
             raise ValueError("subtask_model_url is not set")
         
         model_name = "Qwen2.5-14B-MMLU-MATH-NUMINATIR-FILTER-UNANSWERABLE-SFT"
+
+        verl_inference_shim = VerlInferenceAPIShim(self)
         
-        factored_task_decomposition_responder.set_subtask_inference_api(SafetyToolingMultiTurnInferenceAPI(
-            model_name,
+        subtask_inference_api = SafetyToolingMultiTurnInferenceAPI(
+            model_name if subtask_model_url != "same_model" else self.model_name,
             multi_turn_responder=factored_task_decomposition_responder,
             print_debug_outputs=False, # TODO(sguo35)
             temperature=0.0,
@@ -133,10 +136,13 @@ class VerlFactoredTaskDecompositionChatScheduler(NaiveChatCompletionScheduler):
             base_url=subtask_model_url,
             force_provider="openai",
             reranker=None
-        ))
+        )
+        if subtask_model_url == "same_model":
+            subtask_inference_api.API = verl_inference_shim
+        factored_task_decomposition_responder.set_subtask_inference_api(subtask_inference_api)
 
         single_turn_inference_api = SafetyToolingInferenceAPI(
-            model_name,
+            model_name if subtask_model_url != "same_model" else self.model_name,
             print_debug_outputs=False,
             temperature=0.0,
             use_assistant_message=True,
@@ -145,6 +151,8 @@ class VerlFactoredTaskDecompositionChatScheduler(NaiveChatCompletionScheduler):
             force_provider="openai",
             reranker=None,
         )
+        if subtask_model_url == "same_model":
+            single_turn_inference_api.API = verl_inference_shim
         factored_task_decomposition_responder.set_single_turn_inference_api(single_turn_inference_api)
 
         self.inference_api = SafetyToolingMultiTurnInferenceAPI(
@@ -154,7 +162,7 @@ class VerlFactoredTaskDecompositionChatScheduler(NaiveChatCompletionScheduler):
             print_debug_outputs=False, # TODO(sguo35)
             use_assistant_message=True,
         )
-        self.inference_api.API = VerlInferenceAPIShim(self)
+        self.inference_api.API = verl_inference_shim
 
 
         torch.set_printoptions(profile="full")
