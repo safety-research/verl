@@ -18,7 +18,7 @@ def start_vllm_server(model_path: str, vllm_model_name: str, num_gpus: int):
         max_len = 20000
     
     print(f"Starting VLLM server for model: {model_path}")
-    process = subprocess.Popen(f"vllm serve {model_path} --tensor-parallel-size {num_gpus} --max-model-len {max_len} --served-model-name {vllm_model_name}", shell=True, text=True)
+    process = subprocess.Popen(f"VLLM_USE_V1=1 vllm serve {model_path} --tensor-parallel-size {num_gpus} --max-model-len {max_len} --served-model-name {vllm_model_name}", shell=True, text=True)
     
     process.wait()
 
