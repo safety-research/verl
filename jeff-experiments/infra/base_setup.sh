@@ -3,7 +3,7 @@ python -m uv venv anthropic --seed
 source anthropic/bin/activate
 pip install uv
 (apt-get update && apt-get install vim screen rsync nvtop htop iftop psmisc -y) || true
-uv pip install tensordict==0.7.2 peft duckdb jupyterlab
+uv pip install tensordict==0.7.2 peft duckdb jupyterlab evaluate
 uv pip install torch==2.4 setuptools torchao
 uv pip install nvidia-cuda-nvcc-cu12 nvidia-cudnn-cu12
 
