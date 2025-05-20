@@ -57,6 +57,9 @@ class VerlInferenceAPIShim:
             new_kwargs["top_p"] = kwargs["top_p"]
         if "max_completion_tokens" in kwargs:
             new_kwargs["max_completion_tokens"] = kwargs["max_completion_tokens"]
+
+        # Hard code to avoid max seq length issues
+        new_kwargs["max_completion_tokens"] = 384
             
         async with self.rate_limit:
             try:
@@ -69,7 +72,6 @@ class VerlInferenceAPIShim:
                 )
             except Exception as e:
                 print(f"Error submitting chat completion: {e}")
-                wandb.log({"errors/generation_failure": str(e)}, commit=False)
 
                 return [
                     LLMResponse(
@@ -122,7 +124,7 @@ class VerlFactoredTaskDecompositionChatScheduler(NaiveChatCompletionScheduler):
         if subtask_model_url == "unset":
             raise ValueError("subtask_model_url is not set")
         
-        model_name = "Qwen2.5-14B-MMLU-MATH-NUMINATIR-FILTER-UNANSWERABLE-SFT"
+        model_name = config.get("subtask_model_name", "Qwen2.5-14B-MMLU-MATH-NUMINATIR-FILTER-UNANSWERABLE-SFT")
 
         verl_inference_shim = VerlInferenceAPIShim(self)
         
@@ -214,7 +216,6 @@ class VerlFactoredTaskDecompositionChatScheduler(NaiveChatCompletionScheduler):
                         )
                 except Exception as e:
                     print(f"Error submitting chat completion: {e}")
-                    wandb.log({"errors/generation_failure": str(e)}, commit=False)
 
                     # This example will be masked out in the loss because it has no assistant response
                     batch_conversations[index] = [
@@ -336,6 +337,5 @@ class VerlFactoredTaskDecompositionChatScheduler(NaiveChatCompletionScheduler):
         non_tensor_batch = {
             "raw_conversations": np.array(batch_conversations, dtype=object)
         }
-        wandb.log({"non_tensor_batch/raw_conversation": str(batch_conversations[0])}, commit=False)
 
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
