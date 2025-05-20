@@ -40,8 +40,8 @@ def _parse_latex(expr: str) -> str:
 
     # Replace the specific characters that this parser uses.
     expr = expr.replace("√", "sqrt")
-    expr = expr.replace("π", "pi")
-    expr = expr.replace("∞", "inf")
+    expr = expr.replace("π", "\\pi")
+    expr = expr.replace("∞", "\\infty")
     expr = expr.replace("∪", "U")
     expr = expr.replace("·", "*")
     expr = expr.replace("×", "*")

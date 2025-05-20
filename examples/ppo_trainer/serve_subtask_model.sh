@@ -1,0 +1,1 @@
+VLLM_USE_V1=1 CUDA_VISIBLE_DEVICES=3 vllm serve /root/Qwen2.5-14B-MMLU-MATH-NUMINATIR-FILTER-UNANSWERABLE-SFT/global_step_364 --port 9001 --disable-log-requests --served-model-name Qwen2.5-14B-MMLU-MATH-NUMINATIR-FILTER-UNANSWERABLE-SFT --enable-chunked-prefill 
