@@ -162,6 +162,7 @@ class vLLMRollout(BaseRollout):
             enable_prefix_caching=True,
             trust_remote_code=trust_remote_code,
             seed=config.get("seed", 0),
+            quantization="fp8",
             **engine_kwargs,
         )
 

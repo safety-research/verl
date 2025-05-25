@@ -215,7 +215,9 @@ class ActorRolloutRefWorker(Worker):
                 actor_module_class = AutoModelForVision2Seq
             else:
                 actor_module_class = AutoModelForCausalLM
-
+            from verl.third_party.deep_gemm.fp8_linear import FP8Linear
+            origin_linear = torch.nn.Linear
+            torch.nn.Linear = FP8Linear
             actor_module = actor_module_class.from_pretrained(
                 pretrained_model_name_or_path=local_path,
                 torch_dtype=torch_dtype,
@@ -223,7 +225,7 @@ class ActorRolloutRefWorker(Worker):
                 attn_implementation="flash_attention_2",
                 trust_remote_code=trust_remote_code,
             )
-
+            torch.nn.Linear = origin_linear
             # Apply Liger kernel to the model if use_liger is set to True
             if use_liger:
                 from liger_kernel.transformers.monkey_patch import _apply_liger_kernel_to_instance

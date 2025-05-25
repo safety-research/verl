@@ -196,5 +196,66 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         model = self.model_runner.model
         patch_vllm_moe_model_weight_loader(model)
         device = get_torch_device().current_device()  # used when fsdp2 set cpu_offload_policy
-        loaded_params = model.load_weights(((name, param.to(device, non_blocking=True).full_tensor() if isinstance(param, DTensor) else param) for name, param in updated_params.items()))
-        logger.info("vLLM load weights, loaded_params: %d", len(loaded_params))
+        vllm_config = self.inference_engine.llm_engine.vllm_config
+        model_config = vllm_config.model_config
+        from torch import nn
+        from vllm.model_executor.model_loader import get_model_architecture
+        from vllm.model_executor.model_loader.utils import configure_quant_config, set_default_torch_dtype
+        from vllm.attention import Attention
+        from vllm.model_executor.layers.linear import QKVCrossParallelLinear
+        from vllm.model_executor.model_loader.loader import device_loading_context
+        from vllm.config import ModelConfig
+        from vllm.model_executor.layers.quantization.base_config import QuantizeMethodBase
+        def _process_weights_after_loading(model: nn.Module, model_config: ModelConfig,
+                                        target_device: torch.device) -> None:
+            for _, module in model.named_modules():
+                if isinstance(module, QKVCrossParallelLinear):
+                    # NOTE(Isotr0py): special case for cross QKV layer because
+                    # q and kv proj aren't registered as submodules intentionally
+                    module.process_weights_after_loading()
+                    continue
+                quant_method = getattr(module, "quant_method", None)
+                if isinstance(quant_method, QuantizeMethodBase):
+                    # When quant methods need to process weights after loading
+                    # (for repacking, quantizing, etc), they expect parameters
+                    # to be on the global target device. This scope is for the
+                    # case where cpu offloading is used, where we will move the
+                    # parameters onto device for processing and back off after.
+                    with device_loading_context(module, target_device):
+                        quant_method.process_weights_after_loading(module)
+
+            # Currently only used by MLA.
+            # NOTE: This intentionally happens after other modules so we can easily
+            # decompress the weights for MLA.
+            for _, module in model.named_modules():
+                if isinstance(module, Attention) and \
+                    hasattr(module, "process_weights_after_loading"):
+                    # TODO(lucas): see if there is a way to unify the signatures
+                    # of process_weights_after_loading
+                    module.process_weights_after_loading(model_config.dtype)
+
+
+        with set_default_torch_dtype(model_config.dtype):
+            with torch.device(device):
+                model_config = vllm_config.model_config
+                model_class = None
+                if model_class is None:
+                    model_class, _ = get_model_architecture(model_config)
+
+                if vllm_config.quant_config is not None:
+                    configure_quant_config(vllm_config.quant_config, model_class)
+
+                signatures = inspect.signature(model_class.__init__)
+                all_params = [param.name for param in signatures.parameters.values()]
+                prefix=""
+                if "vllm_config" in all_params and "prefix" in all_params:
+                    # new-style model class
+                    model = model_class(vllm_config=vllm_config, prefix=prefix)
+             
+            loaded_params = model.load_weights(((name, param.to(device, non_blocking=True).full_tensor() if world_size != 1 and hasattr(param, "full_tensor") else param) for name, param in updated_params.items()))
+
+            _process_weights_after_loading(model, model_config, torch.device(device))
+            logger.info("vLLM load weights, loaded_params: %d", len(loaded_params))
+
+        self.model_runner.model = model 
+
