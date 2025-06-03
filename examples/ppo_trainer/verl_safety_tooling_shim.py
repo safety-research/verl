@@ -34,7 +34,7 @@ class VerlInferenceAPIShim:
         self.chat_scheduler = chat_scheduler
         self.rate_limit = asyncio.Semaphore(80)
 
-    async def __call__(self, model_id: str, prompt: Prompt, print_prompt_and_response: bool = False, **kwargs):
+    async def __call__(self, model_id: str, prompt: Prompt, print_prompt_and_response: bool = False, **kwargs):        
         assert isinstance(prompt, Prompt)
 
         oai_format_prompt = prompt.openai_format()
@@ -59,7 +59,8 @@ class VerlInferenceAPIShim:
             new_kwargs["max_completion_tokens"] = kwargs["max_completion_tokens"]
 
         # Hard code to avoid max seq length issues
-        new_kwargs["max_completion_tokens"] = 384
+        if len(prompt.messages) > 3:
+            new_kwargs["max_completion_tokens"] = 384
             
         async with self.rate_limit:
             try:
@@ -71,7 +72,9 @@ class VerlInferenceAPIShim:
                     **new_kwargs,
                 )
             except Exception as e:
-                print(f"Error submitting chat completion: {e}")
+                import traceback
+                print(f"Error submitting chat completion")
+                traceback.print_exc()
 
                 return [
                     LLMResponse(
@@ -117,6 +120,8 @@ class VerlFactoredTaskDecompositionChatScheduler(NaiveChatCompletionScheduler):
                 multi_turn_responder_unanswerable_final_subtask_response_override="regenerate_if_unanswerable_or_directly_answered",
                 multi_turn_responder_subtask_prompt_suffix="all_prior_subtask_descriptions_and_results",
                 subtask_use_cot=False,
+                decomposition_max_depth=0,
+                enforce_n_turns=-1,
             )
         )
 

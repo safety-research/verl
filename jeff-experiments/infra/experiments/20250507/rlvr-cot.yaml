@@ -3,7 +3,7 @@ resources:
   cloud: runpod
   accelerators: H200:4
   region: US
-  zone: US-TX-4
+  # zone: US-TX-4
   disk_size: 2000
   image_id: runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
@@ -16,14 +16,14 @@ file_mounts:
   ~/sky_workdir/cot-decomp: ~/cot-decomp
   ~/.env_anthropic: ~/.env_anthropic
   # CHANGE ME
-  ~/data/train.parquet: /Users/jeff/cot-decomp/sft/datagen/loan_dataset_cot/train_dataset.parquet
-  ~/data/val.parquet: /Users/jeff/cot-decomp/sft/datagen/loan_dataset_cot/test_dataset.parquet
+  ~/data/train.parquet: /Users/jeff/cot-decomp/output/loan_dataset_church_mosque_cot_same/train_dataset.parquet
+  ~/data/val.parquet: /Users/jeff/cot-decomp/output/loan_dataset_church_mosque_cot_same/test_dataset.parquet
 
 # working dir is ~/sky_workdir/
 
 envs:
   # CHANGE ME
-  EXPERIMENT_NAME: loan-cot-no-monitor
+  EXPERIMENT_NAME: loan-cot-sonnet37-monitor-penaltyenabled-batch128-same
   PROJECT_NAME: rlvr-dev
   REF_MODEL: /root/Qwen2.5-14B-MMLU-MATH-NUMINATIR-FILTER-UNANSWERABLE-SFT/global_step_364
 

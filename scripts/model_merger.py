@@ -17,6 +17,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Tuple
+from accelerate import init_empty_weights
 
 import numpy as np
 import torch
@@ -213,7 +214,7 @@ def convert_fsdp_checkpoints_to_hfmodels():
     else:
         raise NotImplementedError(f"Unknown architecture {config['architectures']}")
 
-    with torch.device("meta"):
+    with init_empty_weights():
         model = auto_model.from_config(config, torch_dtype=torch.bfloat16)
     model.to_empty(device="cpu")
     model = patch_model_generation_config(model, args.hf_model_path)

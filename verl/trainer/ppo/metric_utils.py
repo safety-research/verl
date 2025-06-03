@@ -118,9 +118,9 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> Dict[str,
 
     for key, val in batch.non_tensor_batch.items():
         if key.endswith("_score"):
-            metrics[f"reward_model/{key}/mean"] = np.mean(val)
-            metrics[f"reward_model/{key}/max"] = np.max(val)
-            metrics[f"reward_model/{key}/min"] = np.min(val)
+            metrics[f"reward_model/{key}/mean"] = np.nanmean(val)
+            metrics[f"reward_model/{key}/max"] = np.nanmax(val)
+            metrics[f"reward_model/{key}/min"] = np.nanmin(val)
 
     return metrics
 
@@ -219,6 +219,7 @@ def process_validation_metrics(data_sources: list[str], sample_inputs: list[str]
                 metric = {}
                 n_resps = len(var_vals)
                 metric[f"mean@{n_resps}"] = np.mean(var_vals)
+                metric[f"clean_mean@{n_resps}"] = np.nanmean(var_vals)
 
                 if n_resps > 1:
                     # n = n_resps

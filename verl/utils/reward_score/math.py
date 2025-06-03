@@ -104,6 +104,119 @@ def _strip_properly_formatted_commas(expr: str):
     return next_expr
 
 
+
+# Map of superscript characters to normal characters
+superscript_map = {
+    '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4',
+    '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9',
+    '⁺': '+', '⁻': '-', '⁽': '(', '⁾': ')', 'ⁿ': 'n'
+}
+
+# Build regex pattern to match sequences of superscript characters
+superscript_chars = ''.join(superscript_map.keys())
+pattern = re.compile(rf'([{superscript_chars}]+)')
+
+# Replace superscripts with ^{...}
+def replace_superscripts(text):
+    def replacer(match):
+        chars = match.group(1)
+        converted = ''.join(superscript_map.get(c, '') for c in chars)
+        return f'^{{{converted}}}'
+    
+    return pattern.sub(replacer, text)
+
+
+def convert_square_roots_to_latex(expr):
+    # Match cases with optional leading number, optional spaces, then √, then digits/vars
+    pattern = re.compile(r'(?<!\\)(\d*)\s*√\s*([a-zA-Z0-9]+)')
+    
+    def repl(match):
+        coeff = match.group(1)
+        radicand = match.group(2)
+        if coeff:
+            return f"{coeff}\\sqrt{{{radicand}}}"
+        else:
+            return f"\\sqrt{{{radicand}}}"
+    
+    return pattern.sub(repl, expr)
+
+
+import re
+
+def convert_column_vector(expr):
+    # First, unwrap \boxed{...} if present
+    expr = re.sub(r'\\boxed\{(\\begin\{pmatrix\}.*?\\end\{pmatrix\})\}', r'\1', expr)
+
+    # Match the \begin{pmatrix}...\end{pmatrix} block
+    pattern = re.compile(r'\\begin\{pmatrix\}(.*?)\\end\{pmatrix\}', re.DOTALL)
+
+    def repl(match):
+        content = match.group(1).strip()
+
+        # Try both types of separators: \\ and \
+        if '\\\\' in content:
+            rows = content.split('\\\\')
+        elif '\\' in content:
+            rows = content.split('\\')
+        else:
+            # No backslash? Probably not a valid vector
+            return match.group(0)
+
+        # Clean up the rows
+        clean_rows = [r.strip() for r in rows if r.strip()]
+
+        # Only convert if it's a column vector (not a matrix)
+        if all('&' not in r for r in clean_rows):
+            return f"({', '.join(clean_rows)})"
+        else:
+            return match.group(0)  # leave unchanged
+
+    return pattern.sub(repl, expr)
+
+
+import re
+
+def clean_ordinal_superscripts_and_text(expr):
+    # Remove ordinal superscripts like ^{th}, ^{st}, etc.
+    expr = re.sub(r'\^\{(st|nd|rd|th)\}', '', expr, flags=re.IGNORECASE)
+
+    # Recursively unwrap \boxed{...}, \fbox{...}, etc., to check content
+    def unwrap(expr):
+        while True:
+            m = re.fullmatch(r'\\(boxed|fbox)\{(.*)\}', expr.strip())
+            if m:
+                expr = m.group(2).strip()
+            else:
+                break
+        return expr
+
+    unwrapped = unwrap(expr)
+
+    # If the unwrapped version is just \text{...}, return its content
+    m = re.fullmatch(r'\\text\s*\{([^}]*)\}', unwrapped)
+    if m:
+        return m.group(1).strip()
+
+    # Otherwise, remove any \text{...} blocks inside
+    expr = re.sub(r'\\text\s*\{[^}]*\}', '', expr)
+
+    # Final cleanup
+    return expr.strip()
+
+
+
+
+def extract_number_if_prefixed(s):
+    # Unwrap \boxed{...} if present
+    boxed_match = re.fullmatch(r'\\boxed\s*\{(.*)\}', s.strip())
+    if boxed_match:
+        s = boxed_match.group(1).strip()
+
+    # Match flexible "the answer is 123" pattern
+    match = re.fullmatch(r'the\s*answer\s*is\s*(\d+)', s, re.IGNORECASE)
+    return match.group(1) if match else s
+
+
 def _normalize(expr: str) -> str:
     """Normalize answer expressions."""
     if expr is None:
@@ -124,6 +237,20 @@ def _normalize(expr: str) -> str:
     expr = expr.replace("million", "*10^6")
     expr = expr.replace("billion", "*10^9")
     expr = expr.replace("trillion", "*10^12")
+
+    expr = expr.replace("π", "\\pi")
+
+    # Remove \mbox{cm}^2 and similar
+    expr = re.sub(r"\\mbox\s*\{\s*[a-zA-Z]+\.?\s*\}(\s*\^\d+)?", "", expr)
+    expr = convert_square_roots_to_latex(expr)
+    expr = replace_superscripts(expr)
+    expr = convert_column_vector(expr)
+    expr = clean_ordinal_superscripts_and_text(expr)
+    # Don't allow "The answer is"
+    # expr = extract_number_if_prefixed(expr)
+
+    if len(expr) == 0:
+        raise Exception(f"Empty expression: {expr} !!!!!!!!!!!!")
 
     for unit in [
         "degree",
@@ -407,6 +534,7 @@ def _strip_string(string):
     # print(string)
 
     # Remove circ (degrees)
+    string = string.replace("°", "")
     string = string.replace("^{\\circ}", "")
     string = string.replace("^\\circ", "")
 

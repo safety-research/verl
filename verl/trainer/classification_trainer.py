@@ -31,7 +31,9 @@ from pathlib import Path
 
 import pandas as pd
 import torch
+import torch.distributed as dist
 import os
+import duckdb
 from datasets import Dataset, disable_caching
 from transformers import (
     AutoTokenizer,
@@ -67,12 +69,48 @@ class ThroughputCallback(TrainerCallback):
             return
         tokens_per_sec = self.token_acc / elapsed
         # MFU = used TFLOPs / peak TFLOPs. We don't know peak, so we expose throughput
-        wandb.log({"tokens_per_sec": tokens_per_sec}, step=state.global_step)
+        if dist.get_rank() == 0:
+            wandb.log({"tokens_per_sec": tokens_per_sec}, step=state.global_step)
         self.token_acc = 0
         self.start_time = time.time()
 
     def on_step_end(self, args, state, control, **kwargs):
         self.token_acc += args.per_device_train_batch_size * self.seq_length
+
+
+
+import pandas as pd
+
+def balance_classes(df, label_col='label', random_state=None):
+    """
+    Balances a DataFrame by undersampling the majority class.
+
+    Parameters:
+        df (pd.DataFrame): Input DataFrame with a binary label column.
+        label_col (str): Name of the label column. Default is 'label'.
+        random_state (int or None): Random state for reproducibility.
+
+    Returns:
+        pd.DataFrame: A new DataFrame with balanced classes.
+    """
+    class_counts = df[label_col].value_counts()
+
+    if len(class_counts) != 2:
+        raise ValueError("Label column must contain exactly two classes (0 and 1).")
+
+    # Identify minority class
+    min_count = class_counts.min()
+
+    # Sample from both classes
+    df_balanced = (
+        df.groupby(label_col, group_keys=False)
+        .apply(lambda x: x.sample(n=min_count, random_state=random_state))
+        .reset_index(drop=True)
+    )
+    print(f"Dataframe went from {len(df)} to {len(df_balanced)} after balancing classes")
+
+    return df_balanced
+
 
 
 # ---------------------------------------------------------------------------
@@ -81,8 +119,7 @@ class ThroughputCallback(TrainerCallback):
 
 def main():
     parser = argparse.ArgumentParser(description="Finetune Qwen classifier with FSDP")
-    parser.add_argument("--train_file", type=Path, required=True, help="Parquet file containing training messages + label columns")
-    parser.add_argument("--val_file", type=Path, help="Parquet file containing validation messages + label columns")
+    parser.add_argument("--train_files", type=str, required=True, help="Parquet file containing training messages + label columns")
     parser.add_argument("--model_name_or_path", default="Qwen/Qwen2.5-14B-Instruct")
     parser.add_argument("--output_dir", type=Path, default="./outputs")
     parser.add_argument("--batch_size", type=int, default=1)
@@ -95,26 +132,45 @@ def main():
     parser.add_argument("--wandb_project", type=str, default="qwen‑chat‑clf")
     parser.add_argument("--gradient_accumulation", type=int, default=1)
     parser.add_argument("--warmup_steps", type=int, default=100)
+    parser.add_argument("--n_train_examples", type=int, default=3000)
     args = parser.parse_args()
 
+    torch.distributed.init_process_group(backend="nccl")
+
     # ‑‑ Init wandb ----------------------------------------------------------------
-    wandb.init(project=args.wandb_project, config=vars(args))
+    if dist.get_rank() == 0:
+        wandb.init(project=args.wandb_project, config=vars(args))
 
     # ‑‑ Load and preprocess dataset ---------------------------------------------
     print("⌛ Loading training dataset …")
-    train_df = pd.read_parquet(args.train_file)
-    if not {"messages", "label"}.issubset(train_df.columns):
-        raise ValueError("Training file must contain 'messages' and 'label' columns")
+    train_df = []
+    val_df = []
+
+    n_train_files = args.train_files.count(",") + 1
+    # per_df_sample_ct = args.n_train_examples // n_train_files
+
+    for train_file in args.train_files.split(","):
+        df = duckdb.query(f"SELECT * FROM '{train_file}'").to_df()
+
+        df = balance_classes(df)
+
+        train = df.sample(n=int(0.9 * len(df)), random_state=42)
+        val = df.drop(train.index)
+        val = val.sample(n=min(500, len(val)), random_state=42)
+
+        train_df.append(train)
+        val_df.append(val)
+
+        if not {"messages", "label"}.issubset(train.columns):
+            raise ValueError("Training file must contain 'messages' and 'label' columns")
+        
+    train_df = pd.concat(train_df, ignore_index=True)
+    train_df = train_df.sample(frac=1.0, random_state=42)
 
     train_ds = Dataset.from_pandas(train_df[["messages", "label"]])
     
-    eval_ds = None
-    if args.val_file:
-        print("⌛ Loading validation dataset …")
-        val_df = pd.read_parquet(args.val_file)
-        if not {"messages", "label"}.issubset(val_df.columns):
-            raise ValueError("Validation file must contain 'messages' and 'label' columns")
-        eval_ds = Dataset.from_pandas(val_df[["messages", "label"]])
+    val_df = pd.concat(val_df, ignore_index=True)
+    eval_ds = Dataset.from_pandas(val_df[["messages", "label"]])
 
     print(f"Training dataset: {train_ds}")
     if eval_ds:
@@ -205,9 +261,9 @@ def main():
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
         save_total_limit=2,
-        load_best_model_at_end=bool(eval_ds),
+        load_best_model_at_end=False,
         metric_for_best_model="accuracy",
-        report_to=["wandb"],
+        report_to=["wandb"] if dist.get_rank() == 0 else [],
         fsdp=["full_shard", "auto_wrap"],
         dataloader_num_workers=4,
         warmup_steps=args.warmup_steps,
@@ -241,7 +297,8 @@ def main():
     if tokenizer is not None:
         tokenizer.save_pretrained(args.output_dir)
 
-    wandb.finish()
+    if dist.get_rank() == 0:
+        wandb.finish()
     print("✅ Training complete! Model saved to", args.output_dir)
 
 

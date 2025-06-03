@@ -23,7 +23,7 @@ file_mounts:
 
 envs:
   # CHANGE ME
-  EXPERIMENT_NAME: loan-no-monitor-church-mosque-clip0.9-bleu-0.5
+  EXPERIMENT_NAME: loan-decomp-qwen3b-monitor-penalty-batch128
   PROJECT_NAME: rlvr-dev
   REF_MODEL: /root/Qwen2.5-14B-MMLU-MATH-NUMINATIR-FILTER-UNANSWERABLE-SFT/global_step_364
 
