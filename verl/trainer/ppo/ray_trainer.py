@@ -415,6 +415,37 @@ class RayPPOTrainer:
         self._validate_config()
         self._create_dataloader(train_dataset, val_dataset, collate_fn, train_sampler)
 
+        self.validation_stop_fn = self._load_validation_stop_fn()
+
+    def _load_validation_stop_fn(self):
+        if self.config.trainer.get("validation_stop_fn") is None:
+            return lambda data_metrics, is_last_step: is_last_step
+        else:
+            file_path = self.config.trainer.get("validation_stop_fn") or None
+            if not file_path:
+                return None
+
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"Validation stop function file '{file_path}' not found.")
+
+            import importlib, sys
+
+            spec = importlib.util.spec_from_file_location("custom_module", file_path)
+            module = importlib.util.module_from_spec(spec)
+            try:
+                sys.modules["custom_module"] = module
+                spec.loader.exec_module(module)
+            except Exception as e:
+                raise RuntimeError(f"Error loading module from '{file_path}': {e}") from e
+
+            function_name = self.config.trainer.get("validation_stop_fn_name")
+            if not hasattr(module, function_name):
+                raise AttributeError(f"Validation stop function '{function_name}' not found in '{file_path}'.")
+
+            print(f"using customized validation stop function '{function_name}' from '{file_path}'")
+            raw_fn = getattr(module, function_name)
+            return raw_fn
+
     def _validate_config(self):
         config = self.config
         # number of GPUs total
@@ -1001,6 +1032,7 @@ class RayPPOTrainer:
                     non_tensor_batch_keys=non_tensor_batch_keys_to_pop,
                 )
 
+                # TODO(sguo35): implement a custom stopping condition
                 is_last_step = self.global_steps >= self.total_training_steps
 
                 with _timer("step", timing_raw):
@@ -1195,7 +1227,14 @@ class RayPPOTrainer:
                     }
                 )
                 # collect metrics
-                metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
+                data_metrics = compute_data_metrics(batch=batch, use_critic=self.use_critic)
+
+                is_last_step = self.validation_stop_fn(data_metrics, is_last_step)
+                if is_last_step:
+                    with _timer("save_checkpoint", timing_raw):
+                        self._save_checkpoint()
+
+                metrics.update(data_metrics)
                 metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
                 # TODO: implement actual tflpo and theoretical tflpo
                 n_gpus = self.resource_pool_manager.get_n_gpus()

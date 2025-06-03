@@ -44,6 +44,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+from typing import Dict, List, Tuple
+from accelerate import init_empty_weights
 
 import numpy as np
 import torch
@@ -311,6 +313,10 @@ class FSDPModelMerger(BaseModelMerger):
 
         hf_model_keys = set(hf_state_dict.keys())
         collected_keys = set(state_dict.keys())
+    with init_empty_weights():
+        model = auto_model.from_config(config, torch_dtype=torch.bfloat16)
+    model.to_empty(device="cpu")
+    model = patch_model_generation_config(model, args.hf_model_path)
 
         missing_keys = hf_model_keys - collected_keys
         assert len(missing_keys) == 0, f"Missing keys in collected state dict: {list(sorted(missing_keys))}"
