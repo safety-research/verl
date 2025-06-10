@@ -132,7 +132,7 @@ class ChatCompletionScheduler:
         # LRU cache to map request_id to address
         self.request_id_to_address = LRUCache(maxsize=max_cache_size)
 
-        self.rate_limit = asyncio.Semaphore(80)
+        self.rate_limit = asyncio.Semaphore(512)
 
     async def submit_chat_completions(
         self,

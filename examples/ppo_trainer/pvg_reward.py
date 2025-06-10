@@ -37,7 +37,7 @@ def _get_verifier_scores(solution_strs, verifier_path):
     print("Current Device:", torch.cuda.current_device())
     print("Device Name:", torch.cuda.get_device_name(torch.cuda.current_device()))
 
-    model = LLM(model=verifier_path, tensor_parallel_size=1, gpu_memory_utilization=0.6, enforce_eager=True, distributed_executor_backend="mp")
+    model = LLM(model=verifier_path, tensor_parallel_size=1, gpu_memory_utilization=0.4, enforce_eager=True, distributed_executor_backend="mp")
 
     tokenizer = model.get_tokenizer()
     chats = [[{"role": "user", "content": solution_str}] for solution_str in solution_strs]
@@ -46,7 +46,11 @@ def _get_verifier_scores(solution_strs, verifier_path):
     l_verifier_scores = model.classify(chats)
     l_verifier_scores = [o.outputs.probs[1] for o in l_verifier_scores]
 
+    del model.llm_engine.model_executor
     del model
+
+    gc.collect()
+    torch.cuda.empty_cache()
     gc.collect()
 
     return l_verifier_scores
@@ -136,6 +140,7 @@ def compute_score_batch_pvg_cgc(data_sources, solution_strs, ground_truths, extr
     l_verifier_probs = ray.get(l_verifier_probs)
 
     l_verifier_scores = logit(np.array(l_verifier_probs))
+    l_verifier_scores = np.clip(l_verifier_scores, -10.0, 10.0)
 
     l_role_scores = [0.0 if "subtle flaw" in prompt else 1.0 for prompt in prompts]
     l_helpful_mean = np.mean([l_verifier_scores[i] for i in range(len(solution_strs)) if l_role_scores[i] == 1.0])

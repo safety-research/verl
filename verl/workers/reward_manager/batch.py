@@ -49,6 +49,9 @@ class BatchRewardManager:
         if self.reward_kwargs.get("pass_prompt", False):
             self.reward_kwargs["prompts"] = self.tokenizer.batch_decode(prompt_ids, skip_special_tokens=True)
 
+        if self.reward_kwargs.get("pass_conversation", False):
+            self.reward_kwargs["conversations"] = data.non_tensor_batch["raw_conversations"]
+
         scores = self.compute_score(
             data_sources=data_sources,
             solution_strs=responses_str,
