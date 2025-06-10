@@ -157,7 +157,7 @@ def build_sbatch(cfg: dict, args) -> str:
     sb: List[str] = [
         "#!/bin/bash",
         f"#SBATCH --job-name={job_name}",
-        f"#SBATCH --gres=gpu:{gpus_per_node}",
+        f"#SBATCH --gres=gpu:{gpus_per_node}" if not args.skip_gpu_reservation else "",
         f"#SBATCH --cpus-per-task={args.cpus_per_task}",
         f"#SBATCH --chdir=/home/{args.user}/sky_workdir",
     ]
@@ -216,6 +216,8 @@ def parse_args():
     p.add_argument("--ssh-host", help="Remote login host (e.g. cluster1)")
     p.add_argument("--user", required=True)
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--worker-id", help="Worker ID")
+    p.add_argument("--skip-gpu-reservation", action="store_true")
     return p.parse_args()
 
 
@@ -223,7 +225,7 @@ def parse_args():
 # Remote submission helpers
 # ----------------------------------------------------------------------------
 
-def _remote_submit(host: str, script_path: str, tar_local: str | None, tar_filename: str | None):
+def _remote_submit(host: str, script_path: str, tar_local: str | None, tar_filename: str | None, worker_id: str | None = None):
     subprocess.check_call(["ssh", host, "mkdir", "-p", "/workspace/jeffg"])
     if tar_local and tar_filename:
         print(f"[sky_to_slurm] Uploading mounts tar to {host}:/workspace/jeffg/{tar_filename} …")
@@ -231,7 +233,8 @@ def _remote_submit(host: str, script_path: str, tar_local: str | None, tar_filen
     remote_tmp = f"/tmp/{Path(script_path).name}"
     subprocess.check_call(["rsync", script_path, f"{host}:{remote_tmp}"])
     print("[sky_to_slurm] Submitting batch job …")
-    ssh_res = subprocess.run(["ssh", host, f"sbatch {remote_tmp}"], capture_output=True, text=True)
+
+    ssh_res = subprocess.run(["ssh", host, f"sbatch {remote_tmp}" + f" -w {worker_id}" if worker_id else ""], capture_output=True, text=True)
     if ssh_res.returncode == 0:
         print(ssh_res.stdout.strip())
     else:
@@ -274,7 +277,7 @@ def main() -> None:
     os.chmod(script_path, 0o777)
 
     if args.ssh_host:
-        _remote_submit(args.ssh_host, script_path, tar_local, tar_filename)
+        _remote_submit(args.ssh_host, script_path, tar_local, tar_filename, args.worker_id)
     else:
         print("[sky_to_slurm] Submitting locally … (mount tar not used)")
         res = subprocess.run(["sbatch", script_path], capture_output=True, text=True)
