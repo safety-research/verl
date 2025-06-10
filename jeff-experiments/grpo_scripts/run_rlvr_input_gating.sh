@@ -1,6 +1,6 @@
 set -x
 
-chat_scheduler=examples.ppo_trainer.verl_safety_tooling_shim.VerlFactoredTaskDecompositionChatScheduler
+chat_scheduler=examples.ppo_trainer.verl_safety_tooling_shim.VerlInputGatingChatScheduler
 
 MASTER_ADDR=$(echo "$SKYPILOT_NODE_IPS" | head -n1)
 
@@ -26,7 +26,7 @@ python -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_coef=0.001 \
     actor_rollout_ref.actor.optim.weight_decay=0.0 \
-    actor_rollout_ref.actor.optim.lr=2e-6 \
+    actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
@@ -40,15 +40,12 @@ python -m verl.trainer.main_ppo \
     +actor_rollout_ref.rollout.presence_penalty=1.5 \
     actor_rollout_ref.rollout.max_num_batched_tokens=32768 \
     actor_rollout_ref.rollout.multi_turn.enable=True \
-    actor_rollout_ref.rollout.subtask_model_url=same_model \
+    +actor_rollout_ref.rollout.subtask_model_name=Qwen/Qwen3-8B \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     algorithm.use_kl_in_reward=False \
     custom_reward_function.path=$HOME/sky_workdir/verl/examples/ppo_trainer/loan_reward.py \
-    custom_reward_function.name=compute_score_batch_mi_zi_x_given_zlti \
-    reward_model.reward_manager=batch \
+    custom_reward_function.name=compute_score_cot \
     reward_model.launch_reward_fn_async=False \
-    +reward_model.reward_kwargs.pass_prompt=True \
-    +reward_model.reward_kwargs.pass_conversation=True \
     trainer.critic_warmup=0 \
     trainer.logger=['console','wandb'] \
     trainer.project_name=$PROJECT_NAME \

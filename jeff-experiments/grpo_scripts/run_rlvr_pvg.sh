@@ -32,7 +32,7 @@ python -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=sync \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.7 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
     actor_rollout_ref.rollout.n=8 \
     +actor_rollout_ref.rollout.presence_penalty=1.5 \
     actor_rollout_ref.rollout.max_num_batched_tokens=32768 \
@@ -54,7 +54,7 @@ python -m verl.trainer.main_ppo \
     trainer.val_before_train=False \
     trainer.n_gpus_per_node=$SKYPILOT_NUM_GPUS_PER_NODE \
     trainer.nnodes=$SKYPILOT_NUM_NODES \
-    trainer.save_freq=200 \
+    trainer.save_freq=100 \
     trainer.test_freq=10 \
     trainer.log_val_generations=10 \
     trainer.total_epochs=150 $@

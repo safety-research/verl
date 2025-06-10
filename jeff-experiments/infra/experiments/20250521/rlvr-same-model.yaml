@@ -4,7 +4,7 @@ resources:
   accelerators: H200:4
   region: US
   # zone: US-TX-4
-  disk_size: 2000
+  disk_size: 4000
   image_id: runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
 file_mounts:
@@ -16,14 +16,14 @@ file_mounts:
   ~/sky_workdir/cot-decomp: ~/cot-decomp
   ~/.env_anthropic: ~/.env_anthropic
   # CHANGE ME
-  ~/data/train.parquet: /Users/jeff/cot-decomp/output/loan_dataset_church_mosque/train_dataset.parquet
-  ~/data/val.parquet: /Users/jeff/cot-decomp/output/loan_dataset_church_mosque/test_dataset.parquet
+  ~/data/train.parquet: /Users/jeff/cot-decomp/output/loan_dataset_counterfactual_church_mosque/train_dataset.parquet
+  ~/data/val.parquet: /Users/jeff/cot-decomp/output/loan_dataset_counterfactual_church_mosque/test_dataset.parquet
 
 # working dir is ~/sky_workdir/
 
 envs:
   # CHANGE ME
-  EXPERIMENT_NAME: loan-decomp-qwen3b-monitor-penalty-batch128
+  EXPERIMENT_NAME: loan-decomp-mi-zi-x-given-zlti-0.01
   PROJECT_NAME: rlvr-dev
   REF_MODEL: /root/Qwen2.5-14B-MMLU-MATH-NUMINATIR-FILTER-UNANSWERABLE-SFT/global_step_364
 
