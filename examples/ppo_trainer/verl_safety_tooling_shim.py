@@ -1,4 +1,6 @@
 from typing import Dict, Any, List
+import random
+import json
 
 from safetytooling.data_models.messages import Prompt, ChatMessage
 from safetytooling.data_models.inference import LLMResponse
@@ -18,21 +20,30 @@ import torch
 import numpy as np
 import asyncio
 import wandb
+from enum import Enum
+
+from openai import AsyncOpenAI
 
 sys.path.append(os.environ["COT_DECOMP_ROOT"])
 
 from inference.safety_tooling_inference_api import SafetyToolingMultiTurnInferenceAPI, SafetyToolingInferenceAPI
+from inference.input_gating_inference_api import InputGatingInferenceAPI
+from input_gating.input_gating_schema import input_gating_tool_config
 from data.prompt.multi_turn_factored_decomposition import MultiTurnFactoredDecomposition
 
 sys.path.append(os.path.dirname(__file__))
 
 from naive_chat_scheduler import NaiveChatCompletionScheduler
 
+from openai import DefaultAsyncHttpxClient
+from aiohttp import ClientSession
+from httpx_aiohttp import AiohttpTransport
+import httpx
+
 
 class VerlInferenceAPIShim:
     def __init__(self, chat_scheduler: ChatCompletionScheduler):
         self.chat_scheduler = chat_scheduler
-        self.rate_limit = asyncio.Semaphore(80)
 
     async def __call__(self, model_id: str, prompt: Prompt, print_prompt_and_response: bool = False, **kwargs):        
         assert isinstance(prompt, Prompt)
@@ -62,30 +73,29 @@ class VerlInferenceAPIShim:
         if len(prompt.messages) > 3:
             new_kwargs["max_completion_tokens"] = 384
             
-        async with self.rate_limit:
-            try:
-                await self.chat_scheduler.submit_chat_completions(
-                    callback=callback,
-                    callback_additional_info={},
-                    model=model_id,
-                    messages=oai_format_prompt,
-                    **new_kwargs,
-                )
-            except Exception as e:
-                import traceback
-                print(f"Error submitting chat completion")
-                traceback.print_exc()
+        try:
+            await self.chat_scheduler.submit_chat_completions(
+                callback=callback,
+                callback_additional_info={},
+                model=model_id,
+                messages=oai_format_prompt,
+                **new_kwargs,
+            )
+        except Exception as e:
+            import traceback
+            print(f"Error submitting chat completion")
+            traceback.print_exc()
 
-                return [
-                    LLMResponse(
-                        model_id=model_id,
-                        completion="<subtask_description>Return <answer>The sequence was too long</answer></subtask_description>",
-                        stop_reason="stop",
-                        duration=0.1,
-                        api_duration=0.1,
-                        cost=0,
-                    )
-                ]
+            return [
+                LLMResponse(
+                    model_id=model_id,
+                    completion="<subtask_description>Return <answer>The sequence was too long</answer></subtask_description>",
+                    stop_reason="stop",
+                    duration=0.1,
+                    api_duration=0.1,
+                    cost=0,
+                )
+            ]
 
         if print_prompt_and_response:
             print(f"Prompt: {oai_format_prompt}")
@@ -103,6 +113,270 @@ class VerlInferenceAPIShim:
     
 
 
+class VerlInputGatingChatScheduler(NaiveChatCompletionScheduler):
+    def __init__(
+            self,
+            config: DictConfig,
+            model_path: str,
+            server_addresses: List[str],
+            max_cache_size: int = 10000,
+    ):
+        super().__init__(config, model_path, server_addresses, max_cache_size)
+        MultiTurnFactoredDecomposition.MESSAGE_LIMIT = 12
+        
+        model_name = config.get("subtask_model_name", "Qwen2.5-14B-MMLU-MATH-NUMINATIR-FILTER-UNANSWERABLE-SFT")
+
+        self.rate_limit = asyncio.Semaphore(8192)
+
+        self.inference_api = InputGatingInferenceAPI(model_name, cache_dir=None, print_debug_outputs=False, use_assistant_message=True, reranker=None, base_url="http://placeholder123", mcp_kwargs=dict(use_cache=False))
+        
+        httpx_client = httpx.AsyncClient(
+            transport=AiohttpTransport(
+                client=lambda: ClientSession()
+            ),
+            limits=httpx.Limits(max_connections=2048, max_keepalive_connections=1024),
+        )
+
+        print("server addresses", server_addresses)
+        self.l_openai_clients = [
+            AsyncOpenAI(api_key="placeholder123", max_retries=10, base_url="http://" + addr + "/v1/", http_client=httpx_client)
+            for addr in server_addresses
+        ]
+        def random_instance_selector():
+            return self.l_openai_clients[random.randint(0, len(self.l_openai_clients) - 1)]
+        self.inference_api.client = random_instance_selector
+        self.inference_api.mcp.client = random_instance_selector
+
+# {
+#     "role": "assistant",
+#     "tool_calls": [
+#         {
+#             "type": "function",
+#              "function": {
+#                  "name": "get_current_temperature", 
+#                  "arguments": {
+#                      "location": "Paris, France"
+#                 }
+#             }
+#         }
+#     ]
+# }
+# message = {
+#     "role": "tool", 
+#     "name": "get_current_temperature", 
+#     "content": "22.0"
+# }
+    def _convert_msg_cache_to_openai_format(self, conversation: List[List[str]]) -> List[dict[str, str]]:
+        new_conversation = []
+        for msg in conversation:
+            if type(msg[1]) is Enum:
+                msg[1] = msg[1].value
+
+            if msg[1] == "system":
+                new_conversation = []
+
+            # Convert to Huggingface tokenizer format
+            if msg[1] == 'tool_result':
+                d_tool = json.loads(msg[0])
+                new_conversation.append({'role': 'tool', 'name': d_tool['name'], 'content': d_tool['content'] })
+            elif msg[1] == 'tool_call':
+                # Expects last msg to be assistant
+                last_msg = new_conversation[-1]
+                assert last_msg['role'] == 'assistant', str(last_msg)
+
+                if 'tool_calls' not in last_msg:
+                    last_msg['tool_calls'] = []
+
+                d_tool = json.loads(msg[0])
+                last_msg['tool_calls'].append({
+                    'type': 'function',
+                    'function': d_tool
+                })
+            else:
+                new_conversation.append({"role": msg[1], "content": msg[0]})
+
+        return new_conversation
+
+    async def generate_sequences(self, batch: DataProto, **sampling_params) -> DataProto:
+        kwargs = dict(
+            max_completion_tokens=self.config.response_length,
+            temperature=self.config.temperature,
+            top_p=self.config.top_p,
+            presence_penalty=self.config.get('presence_penalty', 0.0),
+            extra_body={
+                "guided_decoding_backend": "xgrammar"
+            }
+        )
+
+        do_sample = batch.meta_info.get("do_sample", True)
+        is_validate = batch.meta_info.get("validate", False)
+
+        n_samples = self.config.n
+        if not do_sample or is_validate:
+            n_samples = 1
+            kwargs["temperature"] = 0
+
+        kwargs.update(sampling_params)
+        print(f"[VerlInputGatingChatScheduler] generate_sequences sampling params: {kwargs}")
+
+        tasks = []
+        batch_conversations = [[] for _ in range(len(batch) * n_samples)]
+        for batch_index, conversation in enumerate(batch.non_tensor_batch["raw_prompt"]):
+
+            async def try_catch_failed_error(index, convo):
+                try:
+                    async with self.rate_limit:
+                        await self.inference_api(
+                                prompt=convo[-1]['content'],
+                                l_msg_cache=batch_conversations[index],
+                                kwargs_override=kwargs
+                            )
+                except Exception as e:
+                    print(f"Error submitting chat completion: {e}")
+
+                    # This example will be masked out in the loss because it has no assistant response
+                    batch_conversations[index] = [
+                        ["The sequence was too long.", "system"],
+                        ["The sequence was too long.", "user"],
+                    ]
+
+                    return None
+
+            for i in range(n_samples):
+                # raw_prompt: [{"role": "user", "content": ""}, ["role": "assistant", "content"], ...]
+                tasks.append(
+                    try_catch_failed_error(batch_index * n_samples + i, conversation)
+                )
+
+        await asyncio.gather(*tasks)
+
+        for i in range(len(batch_conversations)):
+            batch_conversations[i] = self._convert_msg_cache_to_openai_format(batch_conversations[i])
+
+        print("[VerlFactoredTaskDecompositionChatScheduler] generate_sequences done")
+        print(len(batch_conversations), len(tasks))
+
+        ret = self._postprocess(batch, batch_conversations, n_samples)
+
+        return ret
+    
+    def _convert_conversation_to_safety_tooling(self, conversation: List[Dict[str, str]]) -> List[ChatMessage]:
+        return [ChatMessage(role=message["role"], content=message["content"]) for message in conversation]
+    
+    def _build_loss_mask(self, input_ids, messages: List[dict[str, str]]) -> torch.Tensor:
+        """
+        Builds a loss mask for the input ids.
+        The loss mask is 1 for the tokens that are part of an assistant message.
+        Takes a SINGLE example.
+        """
+
+        # Create loss mask by identifying assistant responses
+        loss_mask = torch.zeros_like(input_ids, dtype=torch.long)
+
+        # Process each message to find assistant responses
+        for i, msg in enumerate(messages):
+            # Get tokens for messages up to this point to find the start position
+            prefix_messages = messages[: i + 1]
+            prefix_tokens = self.tokenizer.apply_chat_template(prefix_messages, tokenize=True, return_tensors="pt", add_generation_prompt=False, tools=input_gating_tool_config)
+
+            # Get tokens for messages up to previous point
+            prev_tokens = self.tokenizer.apply_chat_template(messages[:i], tokenize=True, return_tensors="pt", add_generation_prompt=False, tools=input_gating_tool_config) if i > 0 else None
+
+            # Calculate start and end positions
+            start_pos = prev_tokens[0].shape[0] if prev_tokens is not None else 0
+            end_pos = prefix_tokens[0].shape[0]
+
+            # If this is an assistant message, set loss mask
+            if msg["role"] == "assistant":
+                loss_mask[start_pos:end_pos] = 1
+
+        # Padding handled by dp_actor::_forward_micro_batch
+        # and the loss mask is already the same shape for the entire batch
+        # because the tokenization is batched
+
+        return loss_mask.reshape(1, -1)
+        
+    def _postprocess(
+        self, batch: DataProto, batch_conversations: List[List[List[Dict[str, str]]]], n: int
+    ) -> DataProto:
+        # NOTE: consistent with batch version of generate_sequences in vllm_rollout_spmd.py
+        # prompts: left pad
+        # responses: right pad
+        # input_ids: prompt + response
+        # attention_mask: [0,0,0,0,1,1,1,1, | 1,1,1,0,0,0,0,0]
+        # position_ids:   [0,0,0,0,0,1,2,3, | 4,5,6,7,8,9,10,11]
+
+        # prompts: [prompt] from input dataset
+        def patch_prompt_for_input_gating(prompt):
+            new_prompt = []
+
+            for msg in prompt:
+                new_msg = {**msg}
+                if 'INPUT_GATING_START' in msg['content']:
+                    new_msg['content'] = msg['content'].split('INPUT_GATING_START')[1]
+                new_prompt.append(new_msg)
+
+            return new_prompt
+
+
+        prompts = [
+            self.tokenizer.apply_chat_template(patch_prompt_for_input_gating(prompt), add_generation_prompt=True, tokenize=False, tools=input_gating_tool_config)
+            for prompt in batch.non_tensor_batch["raw_prompt"]
+        ]
+
+        assert len(batch_conversations) == (len(prompts) * n)
+
+        # sequences: [prompt + response]
+        for i, conversation in enumerate(batch_conversations):
+            print(f"conversation {i}: {conversation}")
+        sequences = [
+            self.tokenizer.apply_chat_template(patch_prompt_for_input_gating(conversation), add_generation_prompt=False, tokenize=False, tools=input_gating_tool_config)
+            for conversation in batch_conversations
+        ]
+        print("sequences[0]", sequences[0])
+        print("sequences[-1]", sequences[-1])
+
+        # responses: [response]
+        # TODO: mask out tools calling tokens?
+        responses = [sequence[len(prompts[i // n]) :] for i, sequence in enumerate(sequences)]
+
+        prompts = self.tokenizer(prompts, return_tensors="pt", padding="longest", padding_side="left")
+        responses = self.tokenizer(responses, return_tensors="pt", padding="longest", padding_side="right")
+        if n > 1:
+            prompts["input_ids"] = prompts["input_ids"].repeat_interleave(n, dim=0)
+            prompts["attention_mask"] = prompts["attention_mask"].repeat_interleave(n, dim=0)
+
+        input_ids = torch.cat([prompts["input_ids"], responses["input_ids"]], dim=1)
+        attention_mask = torch.cat([prompts["attention_mask"], responses["attention_mask"]], dim=1)
+        position_ids = (attention_mask.cumsum(dim=1) - 1) * attention_mask
+
+        loss_mask = torch.cat([
+            self._build_loss_mask(input_ids[i], batch_conversations[i])
+            for i in range(len(batch_conversations))
+        ])
+
+        batch = TensorDict(
+            {
+                "prompts": prompts["input_ids"],
+                "responses": responses["input_ids"],
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "position_ids": position_ids,
+                "loss_mask": loss_mask,
+            },
+            batch_size=len(input_ids),
+        )
+
+        non_tensor_batch = {
+            "raw_conversations": np.array(batch_conversations, dtype=object)
+        }
+
+        return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
+
+
+    
+
+
 class VerlFactoredTaskDecompositionChatScheduler(NaiveChatCompletionScheduler):
     def __init__(
         self,
@@ -112,6 +386,8 @@ class VerlFactoredTaskDecompositionChatScheduler(NaiveChatCompletionScheduler):
         max_cache_size: int = 10000,
     ):
         super().__init__(config, model_path, server_addresses, max_cache_size)
+
+        MultiTurnFactoredDecomposition.MESSAGE_LIMIT = 12
 
         factored_task_decomposition_responder = MultiTurnFactoredDecomposition(
             prompt_generator=None,
@@ -174,10 +450,15 @@ class VerlFactoredTaskDecompositionChatScheduler(NaiveChatCompletionScheduler):
 
         torch.set_printoptions(profile="full")
 
+        self.rate_limit = asyncio.Semaphore(8192)
+
 
     def _convert_msg_cache_to_openai_format(self, conversation: List[List[str]]) -> List[dict[str, str]]:
         new_conversation = []
         for msg in conversation:
+            if type(msg[1]) is Enum:
+                msg[1] = msg[1].value
+
             if msg[1] == "system":
                 new_conversation = []
 
@@ -212,13 +493,14 @@ class VerlFactoredTaskDecompositionChatScheduler(NaiveChatCompletionScheduler):
 
             async def try_catch_failed_error(index, convo):
                 try:
-                    await self.inference_api(
-                            prompt=None,
-                            l_msg_cache=batch_conversations[index],
-                            use_reranker=False,
-                            l_messages=self._convert_conversation_to_safety_tooling(convo),
-                            kwargs_override=kwargs
-                        )
+                    async with self.rate_limit:
+                        await self.inference_api(
+                                prompt=None,
+                                l_msg_cache=batch_conversations[index],
+                                use_reranker=False,
+                                l_messages=self._convert_conversation_to_safety_tooling(convo),
+                                kwargs_override=kwargs
+                            )
                 except Exception as e:
                     print(f"Error submitting chat completion: {e}")
 
