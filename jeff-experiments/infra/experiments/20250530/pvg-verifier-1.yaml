@@ -25,8 +25,8 @@ envs:
   EXPERIMENT_NAME: verifier1
   OUTPUT_DIR: prover1
   PROJECT_NAME: pvg-verifier
-  REF_MODEL: Qwen/Qwen2.5-0.5B
-  REF_ROLLOUT_MODEL: /root/sky_workdir/checkpoints/pvg/prover0/global_step_127/actor/huggingface
+  REF_MODEL: Qwen/Qwen2.5-7B
+  REF_ROLLOUT_MODEL: /root/sky_workdir/checkpoints/pvg/prover0/global_step_147/actor/huggingface
   TRAIN_FILES: /root/data/prover0/val.parquet,/root/data/prover1/val.parquet
 
 setup: |

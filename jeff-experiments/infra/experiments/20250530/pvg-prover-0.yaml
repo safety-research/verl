@@ -25,7 +25,7 @@ envs:
   EXPERIMENT_NAME: prover0
   PROJECT_NAME: pvg
   REF_MODEL: Qwen/Qwen2.5-7B-Instruct
-  VERIFIER_PATH: /root/verifier0/checkpoint-1368
+  VERIFIER_PATH: /root/verifier0
 
 setup: |
   set -e
@@ -48,4 +48,4 @@ run: |
 
   conda deactivate && source ~/sky_workdir/anthropic/bin/activate && ~/sky_workdir/verl/jeff-experiments/grpo_scripts/run_rlvr_pvg.sh
 
-# python verl/scripts/model_merger.py --backend fsdp --local_dir checkpoints/pvg/prover0/global_step_88/actor --target_dir /root/sky_workdir/checkpoints/pvg/prover0/global_step_88/actor/huggingface --hf_model_path Qwen/Qwen2.5-7B-Instruct
+# python verl/scripts/model_merger.py merge --backend fsdp --local_dir checkpoints/pvg/prover0/global_step_147/actor --target_dir /root/sky_workdir/checkpoints/pvg/prover0/global_step_147/actor/huggingface --hf_model_path Qwen/Qwen2.5-7B-Instruct
