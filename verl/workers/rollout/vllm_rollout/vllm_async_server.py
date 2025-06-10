@@ -175,7 +175,8 @@ class AsyncvLLMServer(AsyncServerBase):
             skip_tokenizer_init=False,
             max_model_len=max_model_len,
             load_format="auto",
-            disable_log_stats=config.disable_log_stats,
+            disable_log_stats=False,
+            disable_log_requests=True,
             max_num_batched_tokens=max_num_batched_tokens,
             enable_chunked_prefill=config.enable_chunked_prefill,
             enable_prefix_caching=True,
@@ -198,9 +199,11 @@ class AsyncvLLMServer(AsyncServerBase):
             model_config,
             models,
             "assistant",
-            request_logger=RequestLogger(max_log_len=4096),
+            request_logger=None,
             chat_template=None,
             chat_template_content_format="auto",
+            enable_auto_tools=True,
+            tool_parser="hermes",
         )
 
     async def chat_completion(self, raw_request: Request):
