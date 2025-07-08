@@ -231,6 +231,7 @@ def _remote_submit(host: str, script_path: str, tar_local: str | None, tar_filen
         print(f"[sky_to_slurm] Uploading mounts tar to {host}:/workspace/jeffg/{tar_filename} …")
         subprocess.check_call(["rsync", tar_local, f"{host}:/workspace/jeffg/{tar_filename}"])
     remote_tmp = f"/tmp/{Path(script_path).name}"
+    print("rsync", script_path, f"{host}:{remote_tmp}")
     subprocess.check_call(["rsync", script_path, f"{host}:{remote_tmp}"])
     print("[sky_to_slurm] Submitting batch job …")
 
@@ -273,6 +274,8 @@ def main() -> None:
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".sbatch") as tmp:
         tmp.write(sbatch_script)
         script_path = tmp.name
+
+        print(f"Wrote slurm file to {script_path}")
 
     os.chmod(script_path, 0o777)
 

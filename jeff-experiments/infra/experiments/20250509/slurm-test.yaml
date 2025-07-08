@@ -46,4 +46,4 @@ run: |
   source ~/sky_workdir/anthropic/bin/activate
 
   echo "Running experiment $EXPERIMENT_NAME on project $PROJECT_NAME"
-  sleep 3600
+#sleep 3600

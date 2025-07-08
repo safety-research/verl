@@ -199,13 +199,11 @@ class VerlInputGatingChatScheduler(NaiveChatCompletionScheduler):
 
     async def generate_sequences(self, batch: DataProto, **sampling_params) -> DataProto:
         kwargs = dict(
-            max_completion_tokens=self.config.response_length,
+            max_completion_tokens=768,
             temperature=self.config.temperature,
             top_p=self.config.top_p,
             presence_penalty=self.config.get('presence_penalty', 0.0),
-            extra_body={
-                "guided_decoding_backend": "xgrammar"
-            }
+            extra_body=dict(chat_template_kwargs={'enable_thinking': False})
         )
 
         do_sample = batch.meta_info.get("do_sample", True)

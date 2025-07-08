@@ -44,7 +44,8 @@ python -m verl.trainer.main_ppo \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     algorithm.use_kl_in_reward=False \
     custom_reward_function.path=$HOME/sky_workdir/verl/examples/ppo_trainer/loan_reward.py \
-    custom_reward_function.name=compute_score_cot \
+    custom_reward_function.name=compute_format_score_cot_batch \
+    reward_model.reward_manager=batch \
     reward_model.launch_reward_fn_async=False \
     trainer.critic_warmup=0 \
     trainer.logger=['console','wandb'] \

@@ -38,4 +38,4 @@ cd ~/sky_workdir/cot-decomp/safety-tooling && uv pip install -e .
 uv pip install transformers==4.51.3
 uv pip install vllm==0.8.5
 uv pip install torch==2.6 torchvision==0.21
-uv pip install triton==3.0.0
+uv pip install triton==3.0.0 backoff

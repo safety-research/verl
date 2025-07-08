@@ -23,7 +23,7 @@ file_mounts:
 
 envs:
   # CHANGE ME
-  EXPERIMENT_NAME: loan-decomp-mi-zi-x-given-zlti-0.01
+  EXPERIMENT_NAME: loan-decomp-mi-zi-x-given-zlti-0.1-gated-penalty-promptv1
   PROJECT_NAME: rlvr-dev
   REF_MODEL: /root/Qwen2.5-14B-MMLU-MATH-NUMINATIR-FILTER-UNANSWERABLE-SFT/global_step_364
 

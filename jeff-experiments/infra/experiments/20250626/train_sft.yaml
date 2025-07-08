@@ -1,7 +1,7 @@
 #  sky launch -c jeff-cotdecomp-8xh100 jeff-experiments/infra/base_job.yaml  --down
 resources:
   cloud: runpod
-  accelerators: H200:4
+  accelerators: H200:8
   region: US
   disk_size: 4000
   image_id: runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
@@ -19,22 +19,26 @@ file_mounts:
 
 envs:
   # CHANGE ME
-  EXPERIMENT_NAME: sft-cot-grader-classifier-head-mmlu-imbalanced
-  PROJECT_NAME: grader
-  REF_MODEL: Qwen/Qwen2.5-14B
+  EXPERIMENT_NAME: qwen3-8b-tulu3-sft
+  PROJECT_NAME: qwen3-rlhf
+  REF_MODEL: Qwen/Qwen3-8B-Base
+  # CHANGE ME
+  FT_MODEL_NAME: Qwen3-8B-Tulu3-Instruct
+  # CHANGE ME
+  BATCH_SIZE: 128
+  MICRO_BATCH_SIZE: 16
+
+  LR: 5e-6
+  CLIP_GRAD: 1.0
 
 setup: |
   set -e
   echo "Running setup."
-  chown -R $USER ~/.ssh
+  chown -R root ~/.ssh
   chmod -R 700 ~/.ssh
   ~/sky_workdir/verl/jeff-experiments/infra/base_setup.sh
-
-
-# Remember to change lora_merge.py and fsdp_sft_trainer.py to use the correct model loader
-# TODO(sguo35): rewrite this to be cleaner
 
 run: |
   set -e
 
-  source ~/.env_anthropic
+  conda deactivate && source ~/sky_workdir/anthropic/bin/activate && ~/sky_workdir/verl/jeff-experiments/run_qwen3_sft.sh /root/${FT_MODEL_NAME}

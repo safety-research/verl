@@ -26,8 +26,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "true"
 import logging
 import re
 from contextlib import nullcontext
-import numpy as np
-from sklearn.metrics import roc_auc_score
 
 import hydra
 import torch
@@ -40,28 +38,19 @@ from torch.distributed.fsdp import CPUOffload, MixedPrecision, ShardingStrategy
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 from tqdm import tqdm
-from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, PreTrainedModel
+from transformers import AutoConfig, AutoModelForCausalLM, PreTrainedModel
 
 import verl.utils.hdfs_io as hdfs_io
 from verl.utils.dataset import SFTDataset
 from verl.utils.dataset.multiturn_sft_dataset import MultiTurnSFTDataset
 from verl.utils.debug import log_gpu_memory_usage
-from verl.utils.device import get_device_name, get_torch_device, is_cuda_available, is_npu_available
+from verl.utils.device import get_device_id, get_device_name, is_cuda_available, is_npu_available
 from verl.utils.distributed import destroy_global_process_group, initialize_global_process_group
 from verl.utils.fs import copy_to_local
-from verl.utils.fsdp_utils import (
-    CPUOffloadPolicy,
-    MixedPrecisionPolicy,
-    apply_fsdp2,
-    fsdp2_load_full_state_dict,
-    get_fsdp_wrap_policy,
-    get_init_weight_context_manager,
-    init_fn,
-    fsdp2_clip_grad_norm_
-)
+from verl.utils.fsdp_utils import CPUOffloadPolicy, MixedPrecisionPolicy, apply_fsdp2, fsdp2_clip_grad_norm_, fsdp2_load_full_state_dict, get_fsdp_wrap_policy, get_init_weight_context_manager, init_fn
+from verl.utils.py_functional import convert_to_regular_types
 from verl.utils.torch_dtypes import PrecisionType
 from verl.utils.torch_functional import get_cosine_schedule_with_warmup, get_wsd_schedule_with_warmup
-from verl.utils.py_functional import convert_to_regular_types
 from verl.utils.tracking import Tracking
 from verl.utils.ulysses import (
     gather_outpus_and_unpad,
@@ -95,23 +84,6 @@ class FSDPSFTTrainer:
         self.tokenizer = tokenizer
         if self.config.data.chat_template is not None:
             raise ValueError("Apply Chat template from config is not supported yet.")
-
-        # Set yes/no answer extraction configuration
-        self.extract_yes_no = getattr(self.config, "extract_yes_no_answers", False)
-        if self.extract_yes_no:
-            print("Yes/No answer extraction enabled - will extract and log yes/no token probabilities")
-            # Check if 'yes' and 'no' are single tokens
-            yes_tokens = self.tokenizer.encode("<answer>yes</answer>", add_special_tokens=False)
-            no_tokens = self.tokenizer.encode("<answer>no</answer>", add_special_tokens=False)
-
-            yes_token = self.tokenizer.encode("yes", add_special_tokens=False)
-            no_token = self.tokenizer.encode("no", add_special_tokens=False)
-
-            self.yes_token_id = yes_token[0] if len(yes_token) == 1 and yes_token[0] in yes_tokens else None
-            self.no_token_id = no_token[0] if len(no_token) == 1 and no_token[0] in no_tokens else None
-            if self.yes_token_id is None or self.no_token_id is None:
-                print("WARNING: 'yes' or 'no' does not correspond to exactly 1 token, disabling yes/no extraction")
-                self.extract_yes_no = False
 
         # normalize dp size
         self._normalize_config_bsz()
@@ -204,6 +176,8 @@ class FSDPSFTTrainer:
         # load config first
         config = AutoConfig.from_pretrained(local_model_path, trust_remote_code=trust_remote_code)
         self.model_config = config
+        if hasattr(self.model_config, "max_position_embeddings"):
+            self.model_config.max_position_embeddings = max(self.model_config.max_position_embeddings, self.config.data.max_length)
         if self.config.ulysses_sequence_parallel_size > 1:
             assert self.use_remove_padding, "Sequence parallel is only supported when remove_padding is enabled"
 
@@ -211,24 +185,13 @@ class FSDPSFTTrainer:
         init_context = get_init_weight_context_manager(use_meta_tensor=not config.tie_word_embeddings, mesh=self.device_mesh)
 
         with init_context():
-            if "Qwen" in self.config.model.partial_pretrain or "MisleadLM" in self.config.model.partial_pretrain:
-                self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(
-                    local_model_path,
-                    config=config,
-                    # Master weights have to be fp32
-                    torch_dtype=torch.float32,
-                    attn_implementation="flash_attention_2",
-                    trust_remote_code=trust_remote_code,
-                )
-            else:
-                self.model: PreTrainedModel = AutoModel.from_pretrained(
-                    local_model_path,
-                    config=config,
-                    # Master weights have to be fp32
-                    torch_dtype=torch.float32,
-                    attn_implementation="flex_attention",
-                    trust_remote_code=trust_remote_code,
-                )
+            self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(
+                local_model_path,
+                config=config,
+                torch_dtype=torch_dtype,
+                attn_implementation="flash_attention_2",
+                trust_remote_code=trust_remote_code,
+            )
 
             if self.use_remove_padding or self.config.ulysses_sequence_parallel_size > 1:
                 from verl.models.transformers.monkey_patch import apply_monkey_patch
@@ -250,7 +213,6 @@ class FSDPSFTTrainer:
                     "lora_alpha": self.config.model.lora_alpha,
                     "target_modules": convert_to_regular_types(self.config.model.target_modules),
                     "bias": "none",
-                    "use_rslora": True
                 }
                 self.model = get_peft_model(self.model, LoraConfig(**lora_config))
 
@@ -282,7 +244,7 @@ class FSDPSFTTrainer:
                 param_init_fn=init_fn,
                 use_orig_params=False,
                 auto_wrap_policy=auto_wrap_policy,
-                device_id=get_torch_device().current_device(),
+                device_id=get_device_id(),
                 sharding_strategy=ShardingStrategy.FULL_SHARD,
                 mixed_precision=mixed_precision,
                 sync_module_states=True,
@@ -291,8 +253,7 @@ class FSDPSFTTrainer:
             )
         elif fsdp_strategy == "fsdp2":
             assert CPUOffloadPolicy is not None, "PyTorch version >= 2.4 is required for using fully_shard API (FSDP2)"
-            mp_policy = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32,
-                                             cast_forward_inputs=True)
+            mp_policy = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32, cast_forward_inputs=True)
 
             fsdp_kwargs = {
                 "mesh": self.device_mesh,
@@ -320,6 +281,7 @@ class FSDPSFTTrainer:
 
         self.steps_per_epoch = len(self.train_dataloader)
         self.total_steps = self.steps_per_epoch * self.config.trainer.total_epochs
+
         if self.device_mesh.get_rank() == 0:
             print(f"Number of steps/epoch {self.steps_per_epoch}, number of epochs {self.config.trainer.total_epochs}, total number of steps {self.total_steps}")
 
@@ -342,9 +304,6 @@ class FSDPSFTTrainer:
         position_ids = batch["position_ids"].to(self.device_name)
         loss_mask = batch.pop("loss_mask")[:, :-1].reshape(-1).to(self.device_name)
         loss_fct = nn.CrossEntropyLoss(reduction="none")
-        
-        # Initialize yes/no answer metrics
-        yes_no_metrics = {}
 
         # Context manager for sequence parallel if needed
         context = self.sharding_manager if use_sp else nullcontext()
@@ -358,18 +317,12 @@ class FSDPSFTTrainer:
                 shift_logits = logits[..., :-1, :].contiguous()
                 shift_labels = labels.contiguous()
                 # Flatten the tokens
-                vocab_size = getattr(self.model.config, "text_config", self.model.config).vocab_size
-
-                shift_logits = shift_logits.view(-1, vocab_size)
+                shift_logits = shift_logits.view(-1, self.model.config.vocab_size)
                 shift_labels = shift_labels.view(-1)
                 # Enable model parallelism
                 shift_labels = shift_labels.to(shift_logits.device)
                 loss = loss_fct(shift_logits, shift_labels)
                 loss = loss * loss_mask.to(loss.device)
-                
-                # Extract yes/no answer logprobs if enabled
-                if self.extract_yes_no and not do_backward:  # Only extract during validation
-                    yes_no_metrics = self._extract_yes_no_logprobs(input_ids, shift_logits, shift_labels, loss_mask)
             else:
                 # IMPORTANT: We have a big assumption here, so we can shard the SAME sequence across SP ranks
                 # i.e., each GPU has <1 sequence, and each SP group has 1 sequence
@@ -413,10 +366,6 @@ class FSDPSFTTrainer:
                 full_loss = full_loss.reshape(-1)
                 loss_mask = loss_mask.to(full_loss.device)
                 loss = full_loss * loss_mask
-                
-                # Extract yes/no answer logprobs if enabled (not implemented for SP mode)
-                if self.extract_yes_no and not do_backward and self.device_mesh.get_rank() == 0:
-                    print("WARNING: Yes/no answer extraction not implemented for sequence parallel mode")
 
             valid_token_this_rank = torch.sum(loss_mask)
 
@@ -430,140 +379,7 @@ class FSDPSFTTrainer:
 
             if do_backward:
                 loss.backward()
-            return loss, yes_no_metrics if self.extract_yes_no else loss
-
-    def _extract_yes_no_logprobs(self, input_ids, logits, labels, loss_mask):
-        """Extract yes/no answers from the last assistant turn and compute log probabilities."""
-        # Only proceed if yes/no extraction is enabled and tokens are valid
-        if not self.extract_yes_no or self.yes_token_id is None or self.no_token_id is None:
-            return {}
-        
-        metrics = {}
-        batch_size = input_ids.shape[0]
-        
-        # For calculating accuracy and F1 score
-        true_positives = 0  # Predicted "yes" when true is "yes"
-        false_positives = 0  # Predicted "yes" when true is "no"
-        true_negatives = 0  # Predicted "no" when true is "no"
-        false_negatives = 0  # Predicted "no" when true is "yes"
-        total_predictions = 0
-        
-        # For ROC AUC calculation
-        y_true = []
-        y_score = []
-        
-        # Find pattern "<answer>yes</answer>" or "<answer>no</answer>" in input
-        for batch_idx in range(batch_size):
-            # Get the original sequence (before shifting)
-            sequence = input_ids[batch_idx].cpu().numpy()
-            # Convert to string to easily search for patterns
-            sequence_text = self.tokenizer.decode(sequence)
-            
-            # Check if this contains a yes/no answer in the last assistant turn
-            contains_yes = "<answer>yes</answer>" in sequence_text
-            contains_no = "<answer>no</answer>" in sequence_text
-            
-            if not (contains_yes or contains_no):
-                continue
-                
-            # Ground truth answer
-            ground_truth = "yes" if contains_yes else "no"
-            expected_token_id = self.yes_token_id if contains_yes else self.no_token_id
-            
-            # Find the position of the yes/no token in the sequence
-            answer_pos = None
-            for i, token_id in enumerate(sequence):
-                if token_id == expected_token_id:
-                    # This should be the yes/no token
-                    answer_pos = i
-                    # Check that this position corresponds to an assistant message (loss_mask == 1)
-                    if i < len(sequence) - 1 and loss_mask[batch_idx * (len(sequence) - 1) + i] == 1:
-                        break
-            
-            if answer_pos is None or answer_pos >= len(sequence) - 1:
-                continue  # No valid yes/no token found
-                
-            # Get the logits for this position
-            logit_idx = batch_idx * (len(sequence) - 1) + answer_pos
-            token_logits = logits[logit_idx]
-            
-            # Calculate log probabilities
-            log_probs = torch.log_softmax(token_logits, dim=-1)
-            yes_logprob = log_probs[self.yes_token_id].item()
-            no_logprob = log_probs[self.no_token_id].item()
-            
-            # Calculate log loss for the correct answer
-            if ground_truth == "yes":
-                log_loss = -yes_logprob
-            else:
-                log_loss = -no_logprob
-            
-            # Determine model's prediction (yes if yes_logprob > no_logprob, otherwise no)
-            predicted = "yes" if yes_logprob > no_logprob else "no"
-            
-            # Update confusion matrix metrics for accuracy and F1
-            total_predictions += 1
-            if ground_truth == "yes" and predicted == "yes":
-                true_positives += 1
-            elif ground_truth == "no" and predicted == "yes":
-                false_positives += 1
-            elif ground_truth == "no" and predicted == "no":
-                true_negatives += 1
-            elif ground_truth == "yes" and predicted == "no":
-                false_negatives += 1
-                
-            # Store values for ROC AUC calculation
-            y_true.append(1 if ground_truth == "yes" else 0)
-            # Use probability of "yes" as score
-            y_score.append(torch.exp(torch.tensor(yes_logprob)).item())
-                
-            metrics[f"yes_no/log_loss_{batch_idx}"] = log_loss
-            metrics[f"yes_no/yes_logprob_{batch_idx}"] = yes_logprob
-            metrics[f"yes_no/no_logprob_{batch_idx}"] = no_logprob
-            metrics[f"yes_no/ground_truth_{batch_idx}"] = 1 if ground_truth == "yes" else 0
-            metrics[f"yes_no/prediction_{batch_idx}"] = 1 if predicted == "yes" else 0
-        
-        # Calculate summary metrics across batch
-        if total_predictions > 0:
-            # Average the log loss
-            if any(k.startswith("yes_no/log_loss") for k in metrics):
-                log_losses = [v for k, v in metrics.items() if k.startswith("yes_no/log_loss")]
-                metrics["yes_no/avg_log_loss"] = sum(log_losses) / len(log_losses)
-            
-            # Calculate accuracy
-            accuracy = (true_positives + true_negatives) / total_predictions
-            metrics["yes_no/accuracy"] = accuracy
-            
-            # Calculate F1 score
-            precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
-            recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
-            f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-            
-            metrics["yes_no/precision"] = precision
-            metrics["yes_no/recall"] = recall
-            metrics["yes_no/f1_score"] = f1
-            
-            # Calculate ROC AUC if we have both positive and negative examples
-            if len(y_true) > 1 and len(set(y_true)) > 1:
-                try:
-                    roc_auc = roc_auc_score(y_true, y_score)
-                    metrics["yes_no/roc_auc"] = roc_auc
-                except ValueError:
-                    # This can happen if all examples are of the same class
-                    pass
-            
-            # Add confusion matrix values for debugging
-            metrics["yes_no/true_positives"] = true_positives
-            metrics["yes_no/false_positives"] = false_positives
-            metrics["yes_no/true_negatives"] = true_negatives
-            metrics["yes_no/false_negatives"] = false_negatives
-            metrics["yes_no/total_predictions"] = total_predictions
-            
-            # Store the raw prediction data for global ROC AUC calculation
-            metrics["yes_no/y_true"] = y_true
-            metrics["yes_no/y_score"] = y_score
-            
-        return metrics
+            return loss
 
     def training_step(self, batch: TensorDict):
         self.fsdp_model.train()
@@ -578,17 +394,12 @@ class FSDPSFTTrainer:
         n_micro_batches = len(micro_batches)
         step_loss = 0
         for micro_batch in micro_batches:
-            if self.extract_yes_no:
-                loss, _ = self._compute_loss_and_backward(batch=micro_batch)
-                loss = loss / n_micro_batches
-            else:
-                loss, _ = self._compute_loss_and_backward(batch=micro_batch)
-                loss = loss / n_micro_batches
+            loss = self._compute_loss_and_backward(batch=micro_batch) / n_micro_batches
             step_loss += loss.item()
 
-        if self.config.model.strategy == 'fsdp':
+        if self.config.model.strategy == "fsdp":
             grad_norm = self.fsdp_model.clip_grad_norm_(max_norm=self.config.optim.clip_grad)
-        elif self.config.model.strategy == 'fsdp2':
+        elif self.config.model.strategy == "fsdp2":
             grad_norm = fsdp2_clip_grad_norm_(self.fsdp_model.parameters(), max_norm=self.config.optim.clip_grad)
         else:
             raise NotImplementedError(f"not implement {self.config.model.strategy}")
@@ -616,20 +427,19 @@ class FSDPSFTTrainer:
             torch.distributed.all_reduce(step_loss, op=torch.distributed.ReduceOp.AVG)
         elif is_npu_available:
             torch.distributed.all_reduce(step_loss)
-            step_loss /= self.ulysses_device_mesh.size(0)
+            step_loss /= self.device_mesh.size(0)
         return {"train/loss": step_loss.detach().item(), "train/lr(1e-3)": lr * 1e3}
 
     def validation_step(self, batch: TensorDict):
         self.fsdp_model.eval()
         with torch.no_grad():
-            if self.extract_yes_no:
-                loss, yes_no_metrics = self._compute_loss_and_backward(batch, do_backward=False)
+            loss = self._compute_loss_and_backward(batch, do_backward=False)
+            if is_cuda_available:
                 torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.AVG)
-                return loss, yes_no_metrics
-            else:
-                loss, _ = self._compute_loss_and_backward(batch, do_backward=False)
-                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.AVG)
-                return loss
+            elif is_npu_available:
+                torch.distributed.all_reduce(loss)
+                loss /= self.device_mesh.size(0)
+        return loss
 
     def save_checkpoint(self, step):
         # save checkpoint
@@ -701,12 +511,7 @@ class FSDPSFTTrainer:
 
         for epoch in range(self.config.trainer.total_epochs):
             self.train_sampler.set_epoch(epoch=epoch)
-            for data in tqdm(
-                self.train_dataloader,
-                total=self.steps_per_epoch,
-                desc=f"Epoch {epoch + 1}/{self.config.trainer.total_epochs}",
-                disable=rank != 0
-            ):
+            for data in tqdm(self.train_dataloader, total=self.steps_per_epoch, desc=f"Epoch {epoch + 1}/{self.config.trainer.total_epochs}", disable=rank != 0):
                 global_step += 1
                 data = TensorDict(data, batch_size=self.config.data.train_batch_size).to(self.device_name)
                 metric = self.training_step(data)
@@ -721,79 +526,13 @@ class FSDPSFTTrainer:
                 if is_last_step or (self.config.trainer.test_freq > 0 and is_valid_step):
                     # Perform validation
                     val_losses = []
-                    all_yes_no_metrics = {}
-                    
-                    # For accumulating confusion matrix across batches
-                    total_tp, total_fp, total_tn, total_fn = 0, 0, 0, 0
-                    
-                    # For global ROC AUC calculation
-                    all_y_true = []
-                    all_y_score = []
-                    
                     for val_data in self.val_dataloader:
-                        val_data = TensorDict(val_data, batch_size=self.config.data.micro_batch_size_per_gpu).cuda()
-                        if self.extract_yes_no:
-                            val_loss, yes_no_metrics = self.validation_step(val_data)
-                            # Extract and accumulate confusion matrix metrics
-                            if "yes_no/true_positives" in yes_no_metrics:
-                                total_tp += yes_no_metrics.get("yes_no/true_positives", 0)
-                                total_fp += yes_no_metrics.get("yes_no/false_positives", 0) 
-                                total_tn += yes_no_metrics.get("yes_no/true_negatives", 0)
-                                total_fn += yes_no_metrics.get("yes_no/false_negatives", 0)
-                            
-                            # Collect data for ROC AUC calculation
-                            if "yes_no/y_true" in yes_no_metrics:
-                                all_y_true.extend(yes_no_metrics["yes_no/y_true"])
-                                all_y_score.extend(yes_no_metrics["yes_no/y_score"])
-                            
-                            # Merge other yes/no metrics across validation batches
-                            for k, v in yes_no_metrics.items():
-                                if k.startswith("yes_no/avg_"):
-                                    all_yes_no_metrics[k] = all_yes_no_metrics.get(k, 0) + v
-                        else:
-                            val_loss = self.validation_step(val_data)
+                        val_data = TensorDict(val_data, batch_size=self.config.data.micro_batch_size_per_gpu).to(self.device_name)
+                        val_loss = self.validation_step(val_data)
                         val_losses.append(val_loss)
                     if rank == 0:
-                        avg_val_loss = torch.mean(torch.stack(val_losses))
-                        metric = {"val/loss": avg_val_loss.detach().item()}
-                        
-                        # Calculate aggregated accuracy and F1 metrics
-                        if self.extract_yes_no and (total_tp + total_fp + total_tn + total_fn > 0):
-                            # Calculate global accuracy
-                            global_accuracy = (total_tp + total_tn) / (total_tp + total_fp + total_tn + total_fn)
-                            metric["yes_no/global_accuracy"] = global_accuracy
-                            
-                            # Calculate global F1 score
-                            global_precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0
-                            global_recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0
-                            global_f1 = 2 * (global_precision * global_recall) / (global_precision + global_recall) if (global_precision + global_recall) > 0 else 0
-                            
-                            metric["yes_no/global_precision"] = global_precision
-                            metric["yes_no/global_recall"] = global_recall
-                            metric["yes_no/global_f1"] = global_f1
-                            
-                            # Calculate global ROC AUC
-                            if len(all_y_true) > 1 and len(set(all_y_true)) > 1:
-                                try:
-                                    global_roc_auc = roc_auc_score(all_y_true, all_y_score)
-                                    metric["yes_no/global_roc_auc"] = global_roc_auc
-                                except ValueError:
-                                    # This can happen if all examples are of the same class
-                                    pass
-                            
-                            # Log confusion matrix
-                            metric["yes_no/global_tp"] = total_tp
-                            metric["yes_no/global_fp"] = total_fp
-                            metric["yes_no/global_tn"] = total_tn  
-                            metric["yes_no/global_fn"] = total_fn
-                        
-                        # Average the other yes/no metrics and add to tracking
-                        if self.extract_yes_no and all_yes_no_metrics:
-                            num_batches = len(self.val_dataloader)
-                            for k, v in all_yes_no_metrics.items():
-                                if k.startswith("yes_no/avg_"):
-                                    metric[k] = v / num_batches
-                                    
+                        val_loss = torch.mean(torch.stack(val_losses))
+                        metric = {"val/loss": val_loss.detach().item()}
                         tracking.log(data=metric, step=global_step)
                         last_valid_metric = metric
                     torch.distributed.barrier()
@@ -806,83 +545,6 @@ class FSDPSFTTrainer:
                         print(f"Final validation metrics: {last_valid_metric}")
                     return
 
-            # validation
-            val_losses = []
-            all_yes_no_metrics = {}
-            
-            # For accumulating confusion matrix across batches
-            total_tp, total_fp, total_tn, total_fn = 0, 0, 0, 0
-            
-            # For global ROC AUC calculation
-            all_y_true = []
-            all_y_score = []
-            
-            for data in self.val_dataloader:
-                data = TensorDict(data, batch_size=self.config.data.micro_batch_size_per_gpu).cuda()
-                if self.extract_yes_no:
-                    val_loss, yes_no_metrics = self.validation_step(data)
-                    # Extract and accumulate confusion matrix metrics
-                    if "yes_no/true_positives" in yes_no_metrics:
-                        total_tp += yes_no_metrics.get("yes_no/true_positives", 0)
-                        total_fp += yes_no_metrics.get("yes_no/false_positives", 0) 
-                        total_tn += yes_no_metrics.get("yes_no/true_negatives", 0)
-                        total_fn += yes_no_metrics.get("yes_no/false_negatives", 0)
-                    
-                    # Collect data for ROC AUC calculation
-                    if "yes_no/y_true" in yes_no_metrics:
-                        all_y_true.extend(yes_no_metrics["yes_no/y_true"])
-                        all_y_score.extend(yes_no_metrics["yes_no/y_score"])
-                    
-                    # Merge other yes/no metrics across validation batches
-                    for k, v in yes_no_metrics.items():
-                        if k.startswith("yes_no/avg_"):
-                            all_yes_no_metrics[k] = all_yes_no_metrics.get(k, 0) + v
-                else:
-                    val_loss = self.validation_step(data)
-                val_losses.append(val_loss)
-            if rank == 0:
-                val_loss = torch.mean(torch.stack(val_losses))
-                metric = {"val/loss": val_loss.detach().item()}
-                
-                # Calculate aggregated accuracy and F1 metrics
-                if self.extract_yes_no and (total_tp + total_fp + total_tn + total_fn > 0):
-                    # Calculate global accuracy
-                    global_accuracy = (total_tp + total_tn) / (total_tp + total_fp + total_tn + total_fn)
-                    metric["yes_no/global_accuracy"] = global_accuracy
-                    
-                    # Calculate global F1 score
-                    global_precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0
-                    global_recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0
-                    global_f1 = 2 * (global_precision * global_recall) / (global_precision + global_recall) if (global_precision + global_recall) > 0 else 0
-                    
-                    metric["yes_no/global_precision"] = global_precision
-                    metric["yes_no/global_recall"] = global_recall
-                    metric["yes_no/global_f1"] = global_f1
-                    
-                    # Calculate global ROC AUC
-                    if len(all_y_true) > 1 and len(set(all_y_true)) > 1:
-                        try:
-                            global_roc_auc = roc_auc_score(all_y_true, all_y_score)
-                            metric["yes_no/global_roc_auc"] = global_roc_auc
-                        except ValueError:
-                            # This can happen if all examples are of the same class
-                            pass
-                    
-                    # Log confusion matrix
-                    metric["yes_no/global_tp"] = total_tp
-                    metric["yes_no/global_fp"] = total_fp
-                    metric["yes_no/global_tn"] = total_tn  
-                    metric["yes_no/global_fn"] = total_fn
-                
-                # Average the other yes/no metrics and add to tracking
-                if self.extract_yes_no and all_yes_no_metrics:
-                    num_batches = len(self.val_dataloader)
-                    for k, v in all_yes_no_metrics.items():
-                        if k.startswith("yes_no/avg_"):
-                            metric[k] = v / num_batches
-                
-                tracking.log(data=metric, step=global_step)
-            torch.distributed.barrier()
 
 def run_sft(config):
     device_name = get_device_name()

@@ -133,6 +133,8 @@ class RLHFDataset(Dataset):
             dataframes.append(dataframe)
         self.dataframe: datasets.Dataset = datasets.concatenate_datasets(dataframes)
 
+        print(self.dataframe[0])
+
         print(f"dataset len: {len(self.dataframe)}")
 
         # filter out too long prompts
