@@ -157,7 +157,7 @@ class ActorRolloutRefWorker(MegatronWorker):
             return parallel_model
 
         # Step 3: initialize the megatron model
-        if self._is_actor and self._is_rollout:
+        if self._is_actor or self._is_rollout:
             actor_module = get_model(
                 megatron_actor_model_provider,
                 wrap_with_ddp=True,
@@ -329,7 +329,7 @@ class ActorRolloutRefWorker(MegatronWorker):
         elif self._is_ref:
             override_transformer_config = OmegaConf.to_container(self.config.ref.megatron.get("override_transformer_config", OmegaConf.create()), resolve=True)
         else:
-            override_transformer_config = None
+            override_transformer_config = {}
         self.param_dtype = torch.bfloat16
         log_gpu_memory_usage("Before init actor model and optimizer", logger=logger)
         self.dtype = PrecisionType.to_dtype(self.param_dtype)

@@ -108,6 +108,18 @@ verl is fast with:
    advance/placement
    advance/dpo_extension
    examples/sandbox_fusion_example
+   advance/rollout_trace.rst
+   advance/one_step_off
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Hardware Support
+
+   amd_tutorial/amd_build_dockerfile_page.rst
+   amd_tutorial/amd_vllm_page.rst
+   ascend_tutorial/ascend_quick_start.rst
+   ascend_tutorial/ascend_profiling.rst
+   ascend_tutorial/ascend_profiling_en.rst
 
 .. toctree::
    :maxdepth: 1
