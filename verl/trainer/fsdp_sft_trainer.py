@@ -136,7 +136,7 @@ class FSDPSFTTrainer:
         if self.device_mesh.get_rank() == 0:
             print(f"Using FSDP rank {rank} and size {world_size} for data distribution")
 
-        self.train_sampler = DistributedSampler(self.train_dataset, shuffle=True, num_replicas=world_size, rank=rank, drop_last=True)
+        self.train_sampler = DistributedSampler(self.train_dataset, shuffle=self.config.data.get('shuffle', True), num_replicas=world_size, rank=rank, drop_last=True)
         self.train_dataloader = DataLoader(
             dataset=self.train_dataset,
             batch_size=config.data.train_batch_size,
@@ -146,7 +146,7 @@ class FSDPSFTTrainer:
             drop_last=True,
         )
 
-        self.val_sampler = DistributedSampler(self.val_dataset, shuffle=False, num_replicas=world_size, rank=rank, drop_last=True)
+        self.val_sampler = DistributedSampler(self.val_dataset, shuffle=self.config.data.get('shuffle', True), num_replicas=world_size, rank=rank, drop_last=True)
         self.val_dataloader = DataLoader(
             dataset=self.val_dataset,
             batch_size=config.data.micro_batch_size_per_gpu,
@@ -213,15 +213,31 @@ class FSDPSFTTrainer:
                     "lora_alpha": self.config.model.lora_alpha,
                     "target_modules": convert_to_regular_types(self.config.model.target_modules),
                     "bias": "none",
+                    "use_rslora": True
                 }
                 self.model = get_peft_model(self.model, LoraConfig(**lora_config))
 
         if self.config.model.enable_gradient_checkpointing:
             self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
 
+        if self.config.model.get("use_fp8_gemm", False):
+            from torchao.float8 import convert_to_float8_training
+
+            def module_filter_fn(mod: torch.nn.Module, fqn: str):
+                # don't convert the last module
+                if fqn == "1":
+                    return False
+                # don't convert linear modules with weight dimensions not divisible by 16
+                if isinstance(mod, torch.nn.Linear):
+                    if mod.in_features % 16 != 0 or mod.out_features % 16 != 0:
+                        return False
+                return True
+
+            convert_to_float8_training(self.model, module_filter_fn=module_filter_fn)
+
         log_gpu_memory_usage("After model allocation", logger=logger)
 
-        mixed_precision = MixedPrecision(param_dtype=torch.bfloat16, reduce_dtype=torch.float32, buffer_dtype=torch.float32)
+        mixed_precision = MixedPrecision(param_dtype=torch.bfloat16, reduce_dtype=torch.float32, buffer_dtype=torch.bfloat16, keep_low_precision_grads=True)
 
         auto_wrap_policy = get_fsdp_wrap_policy(
             self.model,
@@ -270,12 +286,40 @@ class FSDPSFTTrainer:
 
         log_gpu_memory_usage("After FSDP wrapping", logger=logger)
 
-        self.optimizer = optim.AdamW(
-            self.fsdp_model.parameters(),
-            lr=self.config.optim.lr,
-            betas=self.config.optim.betas,
-            weight_decay=self.config.optim.weight_decay,
-        )
+        if self.config.optim.get("use_stochastic_rounding", False):
+            from adamw_bf16 import AdamWBF16
+
+            self.optimizer = AdamWBF16(
+                self.fsdp_model.parameters(),
+                lr=self.config.optim.lr,
+                betas=self.config.optim.betas,
+                weight_decay=self.config.optim.weight_decay
+            )
+        elif self.config.optim.get("use_fp8_optimizer", False):
+            from torchao.optim import AdamW8bit
+
+            self.optimizer = AdamW8bit(
+                self.fsdp_model.parameters(),
+                lr=self.config.optim.lr,
+                betas=self.config.optim.betas,
+                weight_decay=self.config.optim.weight_decay
+            )
+        elif self.config.optim.get("use_paged_fp8_optimizer", False):
+            import bitsandbytes as bnb
+
+            self.optimizer = bnb.optim.PagedAdamW8bit(
+                self.fsdp_model.parameters(),
+                lr=self.config.optim.lr,
+                betas=self.config.optim.betas,
+                weight_decay=self.config.optim.weight_decay
+            )
+        else:
+            self.optimizer = optim.AdamW(
+                self.fsdp_model.parameters(),
+                lr=self.config.optim.lr,
+                betas=self.config.optim.betas,
+                weight_decay=self.config.optim.weight_decay,
+            )
 
         log_gpu_memory_usage("After initialize optimizer", logger=logger)
 
@@ -557,7 +601,7 @@ def run_sft(config):
     from verl.utils import hf_tokenizer
 
     local_model_path = copy_to_local(src=config.model.partial_pretrain, verbose=True)
-    tokenizer = hf_tokenizer(local_model_path, trust_remote_code=config.model.trust_remote_code)
+    tokenizer = hf_tokenizer(config.model.partial_pretrain, trust_remote_code=config.model.trust_remote_code)
     train_dataset = create_sft_dataset(config.data.train_files, config.data, tokenizer)
     val_dataset = create_sft_dataset(config.data.val_files, config.data, tokenizer)
 

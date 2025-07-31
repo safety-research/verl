@@ -337,6 +337,7 @@ class DataParallelPPOActor(BasePPOActor):
             non_tensor_select_keys = ["multi_modal_inputs"]
             dataloader = data.select(select_keys, non_tensor_select_keys).chunk(num_mini_batches)
         else:
+            # TODO(sguo35): patch minibatch size to be dynamic
             dataloader = batch.split(self.config.ppo_mini_batch_size)
 
         metrics = {}
@@ -349,6 +350,7 @@ class DataParallelPPOActor(BasePPOActor):
                     num_micro_batches = mini_batch.batch.batch_size[0] // self.config.ppo_micro_batch_size_per_gpu
                     micro_batches = data.select(select_keys, non_tensor_select_keys).chunk(num_micro_batches)
                 elif self.config.use_dynamic_bsz:
+                    # TODO(sguo35): die if not using dynamic bsz and we're using ppo_mini_batch_size != real minibatch size
                     max_token_len = self.config.ppo_max_token_len_per_gpu * self.ulysses_sequence_parallel_size
                     micro_batches, _ = rearrange_micro_batches(batch=mini_batch, max_token_len=max_token_len)
                 else:
@@ -420,6 +422,7 @@ class DataParallelPPOActor(BasePPOActor):
 
                     if self.config.use_dynamic_bsz:
                         # relative to the dynamic bsz
+                        # TODO(sguo35): patch mini batch size to be dynamic
                         loss = policy_loss * (len(data) / self.config.ppo_mini_batch_size)
                     else:
                         loss = policy_loss / self.gradient_accumulation

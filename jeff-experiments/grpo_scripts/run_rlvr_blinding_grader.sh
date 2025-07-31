@@ -7,8 +7,8 @@ export COT_DECOMP_ROOT=~/sky_workdir/cot-decomp
 
 python -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
-    data.train_files=$HOME/math_data/train.parquet \
-    data.val_files=$HOME/math_data/val.parquet \
+    data.train_files=$HOME/math_two_valid_sets/train.parquet \
+    data.val_files=$HOME/math_two_valid_sets/val.parquet \
     data.train_batch_size=128 \
     data.max_prompt_length=4096 \
     data.max_response_length=4096 \
@@ -49,7 +49,7 @@ python -m verl.trainer.main_ppo \
     trainer.val_before_train=True \
     trainer.n_gpus_per_node=$SKYPILOT_NUM_GPUS_PER_NODE \
     trainer.nnodes=$SKYPILOT_NUM_NODES \
-    trainer.save_freq=100 \
-    trainer.test_freq=20 \
-    trainer.log_val_generations=20 \
+    trainer.save_freq=10 \
+    trainer.test_freq=10 \
+    trainer.log_val_generations=10 \
     trainer.total_epochs=10 $@

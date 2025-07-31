@@ -3,6 +3,7 @@ resources:
   cloud: runpod
   accelerators: H200:8
   region: US
+  # zone: US-TX-4
   disk_size: 4000
   image_id: runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
@@ -14,19 +15,21 @@ file_mounts:
   ~/sky_workdir/verl: ~/verl
   ~/sky_workdir/cot-decomp: ~/cot-decomp
   ~/.env_anthropic: ~/.env_anthropic
+  ~/classifiers: /Users/jeff/cot-decomp/sft/data/tf_idf_grader
+  ~/math_boxed_two_valid_sets: /Users/jeff/cot-decomp/math_boxed_two_valid_sets 
 
 # working dir is ~/sky_workdir/
 
 envs:
   # CHANGE ME
-  EXPERIMENT_NAME: sft-cot-grader-classifier-head-mmlu-imbalanced
-  PROJECT_NAME: grader
-  REF_MODEL: Qwen/Qwen2.5-14B
+  EXPERIMENT_NAME: qwen25-14b-ref-answer-7b-grader-boxed-format-64group
+  PROJECT_NAME: rlvr-grader-dev
+  REF_MODEL: Qwen/Qwen2.5-14B-Instruct
 
 setup: |
   set -e
   echo "Running setup."
-  chown -R $USER ~/.ssh
+  chown -R root ~/.ssh
   chmod -R 700 ~/.ssh
   ~/sky_workdir/verl/jeff-experiments/infra/base_setup.sh
 
@@ -38,3 +41,4 @@ run: |
   set -e
 
   source ~/.env_anthropic
+  conda deactivate && source ~/sky_workdir/anthropic/bin/activate && ~/sky_workdir/verl/jeff-experiments/grpo_scripts/run_rlvr_cot_grader.sh
