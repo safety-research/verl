@@ -1,0 +1,7 @@
+*.prompt_history*
+*.cache*
+*mmlu-sft*
+*mmlu-math*
+output/*.parquet
+output/*.json
+output

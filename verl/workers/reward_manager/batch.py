@@ -63,6 +63,12 @@ class BatchRewardManager(AbstractRewardManager):
         data_sources = data.non_tensor_batch[self.reward_fn_key]
         extras = data.non_tensor_batch.get("extra_info", [None] * len(data))
 
+        if self.reward_kwargs.get("pass_prompt", False):
+            self.reward_kwargs["prompts"] = self.tokenizer.batch_decode(prompt_ids, skip_special_tokens=True)
+
+        if self.reward_kwargs.get("pass_conversation", False):
+            self.reward_kwargs["conversations"] = data.non_tensor_batch["raw_conversations"]
+
         scores = self.compute_score(
             data_sources=data_sources,
             solution_strs=responses_str,
