@@ -4,10 +4,10 @@ Answer checker API that uses sympy to simplify expressions and check for equalit
 Call grade_answer(given_answer: str, ground_truth: str).
 """
 import re
+
 import sympy
 from pylatexenc import latex2text
 from sympy.parsing import sympy_parser
-
 
 # sympy might hang -- we don't care about trying to be lenient in these cases
 BAD_SUBSTRINGS = ["^{", "^("]
@@ -96,7 +96,7 @@ def _inject_implicit_mixed_number(step: str):
 def _strip_properly_formatted_commas(expr: str):
     # We want to be careful because we don't want to strip tuple commas
     p1 = re.compile("(\d)(,)(\d\d\d)($|\D)")
-    while True:
+    for i in range(1000):
         next_expr = p1.sub("\\1\\3\\4", expr)
         if next_expr == expr:
             break
@@ -143,6 +143,7 @@ def convert_square_roots_to_latex(expr):
 
 import re
 
+
 def convert_column_vector(expr):
     # First, unwrap \boxed{...} if present
     expr = re.sub(r'\\boxed\{(\\begin\{pmatrix\}.*?\\end\{pmatrix\})\}', r'\1', expr)
@@ -176,13 +177,14 @@ def convert_column_vector(expr):
 
 import re
 
+
 def clean_ordinal_superscripts_and_text(expr):
     # Remove ordinal superscripts like ^{th}, ^{st}, etc.
     expr = re.sub(r'\^\{(st|nd|rd|th)\}', '', expr, flags=re.IGNORECASE)
 
     # Recursively unwrap \boxed{...}, \fbox{...}, etc., to check content
     def unwrap(expr):
-        while True:
+        for i in range(1000):
             m = re.fullmatch(r'\\(boxed|fbox)\{(.*)\}', expr.strip())
             if m:
                 expr = m.group(2).strip()

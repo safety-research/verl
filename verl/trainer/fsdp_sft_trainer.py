@@ -34,8 +34,9 @@ from peft import LoraConfig, TaskType, get_peft_model
 from tensordict import TensorDict
 from torch import nn, optim
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
-from torch.distributed.fsdp import CPUOffload, MixedPrecision, ShardingStrategy
+from torch.distributed.fsdp import CPUOffload
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import MixedPrecision, ShardingStrategy
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, PreTrainedModel
@@ -44,25 +45,33 @@ import verl.utils.hdfs_io as hdfs_io
 from verl.utils.dataset import SFTDataset
 from verl.utils.dataset.multiturn_sft_dataset import MultiTurnSFTDataset
 from verl.utils.debug import log_gpu_memory_usage
-from verl.utils.device import get_device_id, get_device_name, is_cuda_available, is_npu_available
-from verl.utils.distributed import destroy_global_process_group, initialize_global_process_group
+from verl.utils.device import (get_device_id, get_device_name,
+                               is_cuda_available, is_npu_available)
+from verl.utils.distributed import (destroy_global_process_group,
+                                    initialize_global_process_group)
 from verl.utils.fs import copy_to_local
-from verl.utils.fsdp_utils import CPUOffloadPolicy, MixedPrecisionPolicy, apply_fsdp2, fsdp2_clip_grad_norm_, fsdp2_load_full_state_dict, get_fsdp_wrap_policy, get_init_weight_context_manager, init_fn
+from verl.utils.fsdp_utils import (CPUOffloadPolicy, MixedPrecisionPolicy,
+                                   apply_fsdp2, fsdp2_clip_grad_norm_,
+                                   fsdp2_load_full_state_dict,
+                                   get_fsdp_wrap_policy,
+                                   get_init_weight_context_manager, init_fn)
 from verl.utils.py_functional import convert_to_regular_types
 from verl.utils.torch_dtypes import PrecisionType
-from verl.utils.torch_functional import get_cosine_schedule_with_warmup, get_wsd_schedule_with_warmup
+from verl.utils.torch_functional import (get_cosine_schedule_with_warmup,
+                                         get_wsd_schedule_with_warmup)
 from verl.utils.tracking import Tracking
-from verl.utils.ulysses import (
-    gather_outpus_and_unpad,
-    get_ulysses_sequence_parallel_world_size,
-    ulysses_pad_and_slice_inputs,
-)
-from verl.workers.sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
+from verl.utils.ulysses import (gather_outpus_and_unpad,
+                                get_ulysses_sequence_parallel_world_size,
+                                ulysses_pad_and_slice_inputs)
+from verl.workers.sharding_manager.fsdp_ulysses import \
+    FSDPUlyssesShardingManager
 
 if is_cuda_available:
-    from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
+    from flash_attn.bert_padding import (index_first_axis, pad_input,
+                                         rearrange, unpad_input)
 elif is_npu_available:
-    from transformers.integrations.npu_flash_attention import index_first_axis, pad_input, rearrange, unpad_input
+    from transformers.integrations.npu_flash_attention import (
+        index_first_axis, pad_input, rearrange, unpad_input)
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_SFT_LOGGING_LEVEL", "WARN"))
@@ -194,13 +203,15 @@ class FSDPSFTTrainer:
             )
 
             if self.use_remove_padding or self.config.ulysses_sequence_parallel_size > 1:
-                from verl.models.transformers.monkey_patch import apply_monkey_patch
+                from verl.models.transformers.monkey_patch import \
+                    apply_monkey_patch
 
                 apply_monkey_patch(model=self.model, ulysses_sp_size=self.config.ulysses_sequence_parallel_size)
 
             # Apply Liger kernel if use_liger is enabled
             if self.config.model.get("use_liger", False):
-                from liger_kernel.transformers.monkey_patch import _apply_liger_kernel_to_instance
+                from liger_kernel.transformers.monkey_patch import \
+                    _apply_liger_kernel_to_instance
 
                 _apply_liger_kernel_to_instance(model=self.model)
 
@@ -296,9 +307,9 @@ class FSDPSFTTrainer:
                 weight_decay=self.config.optim.weight_decay
             )
         elif self.config.optim.get("use_fp8_optimizer", False):
-            from torchao.optim import AdamW8bit
+            from torchao.optim import AdamWFp8
 
-            self.optimizer = AdamW8bit(
+            self.optimizer = AdamWFp8(
                 self.fsdp_model.parameters(),
                 lr=self.config.optim.lr,
                 betas=self.config.optim.betas,
@@ -348,6 +359,9 @@ class FSDPSFTTrainer:
         position_ids = batch["position_ids"].to(self.device_name)
         loss_mask = batch.pop("loss_mask")[:, :-1].reshape(-1).to(self.device_name)
         loss_fct = nn.CrossEntropyLoss(reduction="none")
+        if self.config.model.get("use_liger", False):
+            from liger_kernel.transformers import LigerCrossEntropyLoss
+            loss_fct = LigerCrossEntropyLoss(reduction="none")
 
         # Context manager for sequence parallel if needed
         context = self.sharding_manager if use_sp else nullcontext()
@@ -419,11 +433,12 @@ class FSDPSFTTrainer:
             else:
                 dp_size = 1
 
-            loss = torch.sum(loss) / (valid_token_this_rank + 1e-8) * dp_size
+            loss_sum = torch.sum(loss)
+            loss = loss_sum / (valid_token_this_rank + 1e-8) * dp_size
 
             if do_backward:
                 loss.backward()
-            return loss
+            return loss, loss_sum.detach()
 
     def training_step(self, batch: TensorDict):
         self.fsdp_model.train()
@@ -437,9 +452,13 @@ class FSDPSFTTrainer:
         micro_batches = batch.split(self.config.data.micro_batch_size_per_gpu)
         n_micro_batches = len(micro_batches)
         step_loss = 0
+        total_step_loss = 0
         for micro_batch in micro_batches:
-            loss = self._compute_loss_and_backward(batch=micro_batch) / n_micro_batches
+            loss, total_loss = self._compute_loss_and_backward(batch=micro_batch)
+            loss = loss / n_micro_batches
+
             step_loss += loss.item()
+            total_step_loss += total_loss.item()
 
         if self.config.model.strategy == "fsdp":
             grad_norm = self.fsdp_model.clip_grad_norm_(max_norm=self.config.optim.clip_grad)
@@ -467,32 +486,42 @@ class FSDPSFTTrainer:
         log_gpu_memory_usage("After offload weights", logger=logger)
 
         step_loss = torch.tensor(step_loss).to(self.device_name)
+        total_step_loss = torch.tensor(total_step_loss).to(self.device_name)
         if is_cuda_available:
             torch.distributed.all_reduce(step_loss, op=torch.distributed.ReduceOp.AVG)
+            torch.distributed.all_reduce(total_step_loss, op=torch.distributed.ReduceOp.SUM)
         elif is_npu_available:
             torch.distributed.all_reduce(step_loss)
             step_loss /= self.device_mesh.size(0)
-        return {"train/loss": step_loss.detach().item(), "train/lr(1e-3)": lr * 1e3}
+
+        dp_size = self.device_mesh.size(0) if not self.ulysses_device_mesh else self.ulysses_device_mesh.size(0)
+        total_step_loss = total_step_loss / (self.config.data.train_batch_size * dp_size)
+        return {"train/loss": step_loss.detach().item(), "train/lr(1e-3)": lr * 1e3, "train/loss_sum": total_step_loss.detach().item()}
 
     def validation_step(self, batch: TensorDict):
         self.fsdp_model.eval()
         with torch.no_grad():
-            loss = self._compute_loss_and_backward(batch, do_backward=False)
+            loss, total_loss = self._compute_loss_and_backward(batch, do_backward=False)
             if is_cuda_available:
                 torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.AVG)
+                torch.distributed.all_reduce(total_loss, op=torch.distributed.ReduceOp.SUM)
             elif is_npu_available:
                 torch.distributed.all_reduce(loss)
                 loss /= self.device_mesh.size(0)
-        return loss
+        return loss, total_loss
 
-    def save_checkpoint(self, step):
+    def save_checkpoint(self, step, is_last_step=False):
         # save checkpoint
-        path = os.path.join(self.config.trainer.default_local_dir, f"global_step_{step}")
+        if is_last_step:
+            path = os.path.join(self.config.trainer.default_local_dir, "last")
+        else:
+            path = os.path.join(self.config.trainer.default_local_dir, f"global_step_{step}")
 
         fsdp_strategy = self.config.model.strategy
         if fsdp_strategy == "fsdp":
             # FSDP1 checkpoint saving
-            from torch.distributed.fsdp import FullStateDictConfig, StateDictType
+            from torch.distributed.fsdp import (FullStateDictConfig,
+                                                StateDictType)
 
             cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
             with FSDP.state_dict_type(self.fsdp_model, StateDictType.FULL_STATE_DICT, cfg):
@@ -505,7 +534,11 @@ class FSDPSFTTrainer:
                 self.tokenizer.save_pretrained(path)
         elif fsdp_strategy == "fsdp2":
             # FSDP2 checkpoint saving
-            from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict
+            from torch.distributed.checkpoint.state_dict import (
+                StateDictOptions, get_model_state_dict)
+            
+            if is_last_step and self.config.model.get("lora_rank", 0) > 0:
+                self.fsdp_model.merge_and_unload()
 
             # Get full state dict with FSDP2
             options = StateDictOptions(full_state_dict=True, cpu_offload=True)
@@ -570,19 +603,26 @@ class FSDPSFTTrainer:
                 if is_last_step or (self.config.trainer.test_freq > 0 and is_valid_step):
                     # Perform validation
                     val_losses = []
+                    val_total_losses = []
+                    n_total_val_examples = 0
+
                     for val_data in self.val_dataloader:
                         val_data = TensorDict(val_data, batch_size=self.config.data.micro_batch_size_per_gpu).to(self.device_name)
-                        val_loss = self.validation_step(val_data)
+                        val_loss, val_total_loss = self.validation_step(val_data)
                         val_losses.append(val_loss)
+                        val_total_losses.append(val_total_loss)
+                        n_total_val_examples += len(val_data)
+
                     if rank == 0:
                         val_loss = torch.mean(torch.stack(val_losses))
-                        metric = {"val/loss": val_loss.detach().item()}
+                        val_total_loss = torch.sum(torch.stack(val_total_losses).float()) / n_total_val_examples
+                        metric = {"val/loss": val_loss.detach().item(), "val/loss_sum": val_total_loss.item()}
                         tracking.log(data=metric, step=global_step)
                         last_valid_metric = metric
                     torch.distributed.barrier()
 
                 if is_last_step or (self.config.trainer.save_freq > 0 and is_save_step):
-                    self.save_checkpoint(step=global_step)
+                    self.save_checkpoint(step=global_step, is_last_step=is_last_step)
 
                 if is_last_step:
                     if rank == 0:
