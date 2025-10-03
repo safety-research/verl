@@ -57,7 +57,8 @@ from verl.utils.fsdp_utils import (CPUOffloadPolicy, MixedPrecisionPolicy,
                                    get_init_weight_context_manager, init_fn)
 from verl.utils.py_functional import convert_to_regular_types
 from verl.utils.torch_dtypes import PrecisionType
-from verl.utils.torch_functional import (get_cosine_schedule_with_warmup,
+from verl.utils.torch_functional import (get_constant_schedule_with_warmup,
+                                         get_cosine_schedule_with_warmup,
                                          get_wsd_schedule_with_warmup)
 from verl.utils.tracking import Tracking
 from verl.utils.ulysses import (gather_outpus_and_unpad,
@@ -297,11 +298,15 @@ class FSDPSFTTrainer:
 
         log_gpu_memory_usage("After FSDP wrapping", logger=logger)
 
+        l_parameters = self.fsdp_model.parameters()
+        if self.config.model.get("freeze_router_layers", False):
+            l_parameters = [param for name, param in self.fsdp_model.named_parameters() if "mlp.gate.weight" not in name]
+
         if self.config.optim.get("use_stochastic_rounding", False):
             from adamw_bf16 import AdamWBF16
 
             self.optimizer = AdamWBF16(
-                self.fsdp_model.parameters(),
+                l_parameters,
                 lr=self.config.optim.lr,
                 betas=self.config.optim.betas,
                 weight_decay=self.config.optim.weight_decay
@@ -310,7 +315,7 @@ class FSDPSFTTrainer:
             from torchao.optim import AdamWFp8
 
             self.optimizer = AdamWFp8(
-                self.fsdp_model.parameters(),
+                l_parameters,
                 lr=self.config.optim.lr,
                 betas=self.config.optim.betas,
                 weight_decay=self.config.optim.weight_decay
@@ -319,14 +324,14 @@ class FSDPSFTTrainer:
             import bitsandbytes as bnb
 
             self.optimizer = bnb.optim.PagedAdamW8bit(
-                self.fsdp_model.parameters(),
+                l_parameters,
                 lr=self.config.optim.lr,
                 betas=self.config.optim.betas,
                 weight_decay=self.config.optim.weight_decay
             )
         else:
             self.optimizer = optim.AdamW(
-                self.fsdp_model.parameters(),
+                l_parameters,
                 lr=self.config.optim.lr,
                 betas=self.config.optim.betas,
                 weight_decay=self.config.optim.weight_decay,
@@ -346,6 +351,8 @@ class FSDPSFTTrainer:
             self.lr_scheduler = get_cosine_schedule_with_warmup(optimizer=self.optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=self.total_steps)
         elif self.config.optim.lr_scheduler == "wsd":
             self.lr_scheduler = get_wsd_schedule_with_warmup(optimizer=self.optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=self.total_steps)
+        elif self.config.optim.lr_scheduler == "constant":
+            self.lr_scheduler = get_constant_schedule_with_warmup(optimizer=self.optimizer, num_warmup_steps=num_warmup_steps)
         else:
             raise ValueError(f"Unknown lr scheduler: {self.config.optim.lr_scheduler}")
 
@@ -460,6 +467,11 @@ class FSDPSFTTrainer:
             step_loss += loss.item()
             total_step_loss += total_loss.item()
 
+        if self.config.model.get("freeze_router_layers", False):
+            for name, param in self.fsdp_model.named_parameters():
+                if "mlp.gate.weight" in name:
+                    param.grad = None
+
         if self.config.model.strategy == "fsdp":
             grad_norm = self.fsdp_model.clip_grad_norm_(max_norm=self.config.optim.clip_grad)
         elif self.config.model.strategy == "fsdp2":
@@ -572,6 +584,8 @@ class FSDPSFTTrainer:
             )
 
         global_step = 0
+        resume_step = extract_step(self.config.model.partial_pretrain)
+
         last_valid_metric = None
         # compute the total training steps.
         # the total training steps in SFT is mainly for early exit
@@ -590,6 +604,10 @@ class FSDPSFTTrainer:
             self.train_sampler.set_epoch(epoch=epoch)
             for data in tqdm(self.train_dataloader, total=self.steps_per_epoch, desc=f"Epoch {epoch + 1}/{self.config.trainer.total_epochs}", disable=rank != 0):
                 global_step += 1
+
+                if resume_step is not None and global_step < resume_step:
+                    continue
+
                 data = TensorDict(data, batch_size=self.config.data.train_batch_size).to(self.device_name)
                 metric = self.training_step(data)
                 if rank == 0:

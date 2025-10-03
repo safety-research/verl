@@ -17,6 +17,7 @@ Multi-turn SFT dataset that supports training on conversation data with multiple
 
 from typing import List, Union
 
+import duckdb
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
@@ -68,7 +69,7 @@ class MultiTurnSFTDataset(Dataset):
 
         dataframes = []
         for parquet_file in self.parquet_files:
-            dataframe = pd.read_parquet(parquet_file)
+            dataframe = duckdb.query(f"SELECT * FROM read_parquet('{parquet_file}')").to_df()
             dataframes.append(dataframe)
         self.dataframe = pd.concat(dataframes)
 
